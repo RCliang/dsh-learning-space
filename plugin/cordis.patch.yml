@@ -1,0 +1,8 @@
+# dsh-learn-space —— bundle 自带的挂载声明
+# 装上后 profile 的 dsh.profile.bundles 列出本包名即生效。
+# root 留空默认用进程工作目录（学习数据：curriculum/ materials/ journal/）；
+# 想固定数据目录时在 profile 的 patch 层按 id: learning-space 覆盖 config.root。
+- insert:
+    - id: learning-space
+      name: dsh-learn-space
+      config: {}

@@ -1,0 +1,22 @@
+# 个人学习数据（不公开）
+curriculum/
+journal/
+materials/
+artifacts/
+.learning-space.json
+
+# 工具/会话状态
+.dsh/
+.devflow/
+.acl-recovery/
+.impeccable/
+.qoder/
+
+# 发布时 prepublishOnly 从根 skills/ 复制的内置副本
+plugin/skills/
+
+# 依赖与系统文件
+node_modules/
+*.log
+.DS_Store
+Thumbs.db

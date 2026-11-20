@@ -1,0 +1,59 @@
+{
+  "name": "dsh-learn-space",
+  "version": "1.0.0",
+  "description": "学习空间：AI 辅导的个人学习面板。摸底定位 → 依赖图规划 → 逐节点教学 + quiz 确认，进度/笔记/错题/学习记录沉淀为 Markdown，支持导出自包含 HTML 学习报告。",
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "deepseek-harness",
+    "learning",
+    "ai-tutor",
+    "education",
+    "quiz",
+    "knowledge-graph"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/RCliang/dsh-learning-space.git",
+    "directory": "plugin"
+  },
+  "license": "MIT",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./locale/*.json": "./locale/*.json",
+    "./icon": "./icon.svg",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "index.js",
+    "quiz.js",
+    "client.js",
+    "cordis.patch.yml",
+    "locale/*.json",
+    "icon.svg",
+    "assets/mermaid.min.js",
+    "skills",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "prepublishOnly": "node -e \"require('fs').cpSync('../skills','skills',{recursive:true})\""
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dsh": {
+    "bundle": { "patch": "./cordis.patch.yml" },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-runtime",
+        "@deepseek-ai/dsh-client-ui-sidebar"
+      ]
+    }
+  }
+}

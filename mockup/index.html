@@ -1,0 +1,396 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>学习空间 · 原型</title>
+<script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+<style>
+  :root {
+    --paper: #FAF7F0;
+    --ink: #2B2B28;
+    --ink-light: #6E6A60;
+    --green: #3E6B4F;      /* 已确认 */
+    --red: #B5432E;        /* 疑问/错题 */
+    --blue: #3D5A80;       /* 进行中 */
+    --grey: #9A968C;       /* 未学 */
+    --line: #DED8CB;
+    --card: #FFFEFA;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Noto Serif SC", "Source Han Serif SC", "STSong", serif;
+    line-height: 1.75;
+    max-width: 1080px;
+    margin: 0 auto;
+    padding: 48px 32px 80px;
+  }
+  a { color: var(--blue); text-decoration: none; }
+  a:hover { text-decoration: underline; }
+
+  /* ── 顶栏 ───────────────────── */
+  .site-head { display: flex; align-items: baseline; justify-content: space-between;
+    border-bottom: 1px solid var(--ink); padding-bottom: 14px; }
+  .site-head h1 { font-size: 26px; font-weight: 600; letter-spacing: 2px; }
+  .site-head nav { display: gap; }
+  .site-head nav a { margin-left: 22px; color: var(--ink-light); font-size: 15px; }
+  .site-head nav a.active { color: var(--ink); border-bottom: 2px solid var(--ink); padding-bottom: 4px; }
+
+  .crumb { margin: 26px 0 6px; font-size: 14px; color: var(--ink-light); }
+
+  /* ── 课程头 ───────────────────── */
+  .course-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 26px; }
+  .course-head h2 { font-size: 34px; font-weight: 700; letter-spacing: 1px; }
+  .course-head .meta { font-size: 14px; color: var(--ink-light); margin-top: 4px; }
+  .progress-ring { display: flex; align-items: center; gap: 14px; }
+  .progress-ring svg { transform: rotate(-90deg); }
+  .progress-ring .num { font-size: 26px; font-weight: 700; }
+  .progress-ring .num small { font-size: 13px; color: var(--ink-light); font-weight: 400; display: block; text-align: center;}
+
+  /* ── 两栏：DAG + 顺序清单 ────── */
+  .two-col { display: grid; grid-template-columns: 1fr 300px; gap: 28px; align-items: start; }
+  .panel { background: var(--card); border: 1px solid var(--line); padding: 26px 28px; }
+  .panel h3 { font-size: 17px; font-weight: 600; letter-spacing: 3px; border-bottom: 1px solid var(--line);
+    padding-bottom: 10px; margin-bottom: 16px; }
+  .panel h3 .en { float: right; font-size: 11px; color: var(--grey); letter-spacing: 1px; margin-top: 6px; }
+  .legend { display: flex; gap: 18px; margin-top: 14px; font-size: 13px; color: var(--ink-light); }
+  .legend span::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 50%;
+    margin-right: 6px; vertical-align: 1px; }
+  .legend .l-green::before { background: var(--green); }
+  .legend .l-blue::before  { background: var(--blue); }
+  .legend .l-red::before   { background: var(--red); }
+  .legend .l-grey::before  { background: var(--grey); }
+
+  /* 顺序清单 */
+  .order-list { list-style: none; }
+  .order-list li { display: flex; align-items: baseline; gap: 10px; padding: 9px 4px;
+    border-bottom: 1px dashed var(--line); font-size: 15px; }
+  .order-list li:last-child { border-bottom: none; }
+  .order-list .dot { width: 9px; height: 9px; border-radius: 50%; flex: none; align-self: center; }
+  .order-list .idx { font-size: 12px; color: var(--grey); font-family: Georgia, serif; flex: none; }
+  .st-done .dot { background: var(--green); } .st-doing .dot { background: var(--blue); }
+  .st-warn  .dot { background: var(--red); }  .st-todo .dot { background: var(--grey); }
+  .st-doing { background: rgba(61,90,128,.06); }
+  .st-warn  { background: rgba(181,67,46,.06); }
+  .order-list .note { margin-left: auto; font-size: 12px; color: var(--grey); }
+
+  /* ── 错题摘要 ─────────────────── */
+  .mistakes { margin-top: 28px; }
+  .mistake-item { display: flex; gap: 14px; align-items: baseline; padding: 12px 4px; border-bottom: 1px dashed var(--line); }
+  .tag { flex: none; font-size: 12px; padding: 1px 10px; border: 1px solid; border-radius: 99px; }
+  .tag.careless { color: var(--grey);  border-color: var(--grey); }
+  .tag.rot      { color: var(--red);   border-color: var(--red); }
+  .tag.confuse  { color: var(--blue);  border-color: var(--blue); }
+  .mistake-item .q { font-size: 15px; }
+  .mistake-item .from { margin-left: auto; font-size: 13px; color: var(--ink-light); flex: none; }
+
+  /* ── DAG 节点样式 ─────────────── */
+  .node-done rect { fill: #3E6B4F; }
+  .node-done .label { fill: #FAF7F0; }
+  .node-doing rect { fill: #3D5A80; }
+  .node-doing .label { fill: #FAF7F0; }
+  .node-warn rect { fill: #B5432E; }
+  .node-warn .label { fill: #FAF7F0; }
+  .node-todo rect { fill: none; stroke: #9A968C; stroke-dasharray: 3 3; }
+  .node-todo .label { fill: #6E6A60; }
+
+  /* ── 学习台 / 做题 ─────────────── */
+  .study { margin-top: 28px; }
+  .mode-switch { display: flex; gap: 10px; margin-bottom: 20px; }
+  .mode-btn { font-family: inherit; font-size: 14px; padding: 6px 18px; cursor: pointer;
+    background: none; border: 1px solid var(--line); color: var(--ink-light); border-radius: 99px; }
+  .mode-btn.active { border-color: var(--ink); color: var(--ink); background: var(--paper); }
+  .quiz-prog { font-size: 13px; color: var(--ink-light); margin-bottom: 6px; }
+  .quiz-q { font-size: 17px; margin-bottom: 18px; }
+  .quiz-opts { display: grid; gap: 10px; }
+  .opt { font-family: inherit; font-size: 16px; text-align: left; padding: 12px 18px;
+    background: var(--paper); border: 1px solid var(--line); cursor: pointer; color: var(--ink); }
+  .opt:hover:not(:disabled) { border-color: var(--ink); }
+  .opt:disabled { cursor: default; opacity: .85; }
+  .opt.correct { border-color: var(--green); background: rgba(62,107,79,.09);
+    box-shadow: inset 3px 0 0 var(--green); }
+  .opt.wrong { border-color: var(--red); background: rgba(181,67,46,.08);
+    box-shadow: inset 3px 0 0 var(--red); }
+  .quiz-fb { margin-top: 16px; padding: 14px 18px; font-size: 15px; display: none;
+    border-left: 3px solid; }
+  .quiz-fb.ok { display: block; border-color: var(--green); background: rgba(62,107,79,.07); }
+  .quiz-fb.no { display: block; border-color: var(--red); background: rgba(181,67,46,.06); }
+  .quiz-fb .verdict { font-weight: 700; }
+  .quiz-fb.ok .verdict { color: var(--green); }
+  .quiz-fb.no .verdict { color: var(--red); }
+  .quiz-actions { display: flex; justify-content: space-between; align-items: center; margin-top: 20px; }
+  .btn-primary { font-family: inherit; font-size: 15px; padding: 8px 26px; cursor: pointer;
+    background: var(--ink); color: var(--paper); border: 1px solid var(--ink); }
+  .btn-primary:disabled { opacity: .35; cursor: default; }
+  .btn-ghost { font-family: inherit; font-size: 14px; padding: 8px 16px; cursor: pointer;
+    background: none; border: none; color: var(--ink-light); text-decoration: underline; }
+  .free-input { width: 100%; font-family: inherit; font-size: 15px; line-height: 1.8; color: var(--ink);
+    background: var(--paper); border: 1px solid var(--line); padding: 14px 16px; resize: vertical; }
+  .free-input:focus { outline: none; border-color: var(--ink); }
+  .hint { font-size: 13px; color: var(--grey); }
+
+  .mermaid { display: flex; justify-content: center; }
+  footer { margin-top: 56px; font-size: 13px; color: var(--grey); text-align: center;
+    border-top: 1px solid var(--line); padding-top: 18px; }
+</style>
+</head>
+<body>
+
+<header class="site-head">
+  <h1>学习空间</h1>
+  <nav>
+    <a href="#" class="active">课程</a>
+    <a href="#">错题本</a>
+    <a href="#">日志</a>
+  </nav>
+</header>
+
+<p class="crumb">课程 / 傅里叶变换</p>
+
+<div class="course-head">
+  <div>
+    <h2>傅里叶变换</h2>
+    <p class="meta">上次学习 11 月 12 日 · 距离目标还剩 4 个节点</p>
+  </div>
+  <div class="progress-ring">
+    <svg width="76" height="76">
+      <circle cx="38" cy="38" r="32" fill="none" stroke="#DED8CB" stroke-width="6"/>
+      <circle cx="38" cy="38" r="32" fill="none" stroke="#3E6B4F" stroke-width="6"
+              stroke-dasharray="141 201" stroke-linecap="round"/>
+    </svg>
+    <div class="num">5/9<small>已确认</small></div>
+  </div>
+</div>
+
+<div class="two-col">
+  <section class="panel">
+    <h3>依赖图<span class="en">DEPENDENCY MAP</span></h3>
+    <div class="mermaid">
+flowchart BT
+  classDef done fill:#3E6B4F,color:#FAF7F0
+  classDef doing fill:#3D5A80,color:#FAF7F0
+  classDef warn fill:#B5432E,color:#FAF7F0
+  classDef todo fill:#FAF7F0,color:#6E6A60,stroke:#9A968C,stroke-dasharray:4 3
+
+  正弦函数["正弦函数"]:::done
+  叠加原理["叠加原理"]:::done
+  周期性["周期性与频率"]:::done
+  内积["内积 / 投影"]:::done
+  正交性["三角函数正交性"]:::warn
+  离散采样["离散采样"]:::doing
+  频谱["频谱的含义"]:::todo
+  卷积["卷积定理"]:::todo
+  FT["傅里叶变换"]:::todo
+
+  正弦函数 --> 叠加原理
+  叠加原理 --> 周期性
+  正弦函数 --> 内积
+  内积 --> 正交性
+  周期性 --> 正交性
+  正交性 --> 离散采样
+  正交性 --> 频谱
+  离散采样 --> 频谱
+  频谱 --> 卷积
+  卷积 --> FT
+    </div>
+    <div class="legend">
+      <span class="l-green">已确认 5</span>
+      <span class="l-blue">进行中 1</span>
+      <span class="l-red">待修复 1</span>
+      <span class="l-grey">未学 2</span>
+    </div>
+  </section>
+
+  <aside class="panel">
+    <h3>学习顺序<span class="en">ORDER</span></h3>
+    <ul class="order-list">
+      <li class="st-done"><span class="dot"></span><span class="idx">1</span>正弦函数</li>
+      <li class="st-done"><span class="dot"></span><span class="idx">2</span>叠加原理</li>
+      <li class="st-done"><span class="dot"></span><span class="idx">3</span>周期性与频率</li>
+      <li class="st-done"><span class="dot"></span><span class="idx">4</span>内积 / 投影</li>
+      <li class="st-warn"><span class="dot"></span><span class="idx">5</span>三角函数正交性<span class="note">⚠ 1 道错题</span></li>
+      <li class="st-doing"><span class="dot"></span><span class="idx">6</span>离散采样</li>
+      <li class="st-todo"><span class="dot"></span><span class="idx">7</span>频谱的含义</li>
+      <li class="st-todo"><span class="dot"></span><span class="idx">8</span>卷积定理</li>
+      <li class="st-todo"><span class="dot"></span><span class="idx">9</span>傅里叶变换</li>
+    </ul>
+  </aside>
+</div>
+
+<section class="panel mistakes">
+  <h3>待复习错题<span class="en">MISTAKES</span></h3>
+  <div class="mistake-item">
+    <span class="tag rot">死记硬背</span>
+    <span class="q">$\int_{-\pi}^{\pi}\sin(mx)\sin(nx)\,dx$ 在 $m \ne n$ 时为什么是 0？</span>
+    <span class="from">三角函数正交性</span>
+  </div>
+  <div class="mistake-item">
+    <span class="tag confuse">概念混淆</span>
+    <span class="q">「正交」和「线性无关」是不是一回事？</span>
+    <span class="from">三角函数正交性</span>
+  </div>
+</section>
+
+<section class="panel study">
+  <h3>学习台<span class="en">STUDY</span></h3>
+
+  <!-- 模式切换：选择题 / 自由输入 -->
+  <div class="mode-switch">
+    <button class="mode-btn active" data-mode="quiz">选择题模式</button>
+    <button class="mode-btn" data-mode="free">自由输入模式</button>
+  </div>
+
+  <!-- ── 选择题模式 ── -->
+  <div id="quiz-area">
+    <p class="quiz-prog">第 <span id="q-idx">1</span> / 3 题 · 离散采样</p>
+    <p class="quiz-q">以采样率 $f_s$ 对信号采样，能无失真恢复的最高信号频率是？</p>
+    <div class="quiz-opts" id="quiz-opts">
+      <button class="opt">$f_s$</button>
+      <button class="opt">$\dfrac{f_s}{2}$</button>
+      <button class="opt">$2f_s$</button>
+      <button class="opt">$\dfrac{f_s}{4}$</button>
+    </div>
+    <div class="quiz-fb" id="quiz-fb"></div>
+    <div class="quiz-actions">
+      <button class="btn-ghost" id="btn-free-fallback">这题我想用文字答</button>
+      <button class="btn-primary" id="btn-next" disabled>下一题 →</button>
+    </div>
+  </div>
+
+  <!-- ── 自由输入模式 ── -->
+  <div id="free-area" hidden>
+    <p class="quiz-q">用自己的话回答：为什么采样率必须高于信号最高频率的两倍？</p>
+    <textarea class="free-input" id="free-input" rows="4"
+      placeholder="在这里写下你的思路，AI 会对照依赖图判断你的理解落在哪个节点……&#10;支持 LaTeX：$f_s > 2f_{max}$"></textarea>
+    <div class="quiz-actions">
+      <span class="hint">提交后 AI 判读并标记理解边界，答不上的地方自动记入错题本</span>
+      <button class="btn-primary" id="btn-submit-free">提交</button>
+    </div>
+  </div>
+</section>
+
+<footer>learning-space 原型 · 数据来自 curriculum/ 下的 markdown，构建时解析</footer>
+
+<script type="module">
+  mermaid.initialize({
+    startOnLoad: true,
+    theme: "base",
+    themeVariables: {
+      fontFamily: '"Noto Serif SC", serif',
+      fontSize: "15px",
+      primaryColor: "#FAF7F0",
+      primaryTextColor: "#2B2B28",
+      primaryBorderColor: "#2B2B28",
+      lineColor: "#9A968C",
+      edgeLabelBackground: "#FFFEFA"
+    },
+    flowchart: { curve: "basis", nodeSpacing: 42, rankSpacing: 52 }
+  });
+</script>
+<script async src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+<script>
+  // 简易 KaTeX 自动渲染（错题里的公式）
+  function renderMath() {
+    document.querySelectorAll(".q").forEach(el => {
+      const tex = el.textContent;
+      const html = tex.replace(/\$([^$]+)\$/g, (_, m) =>
+        katex.renderToString(m, { throwOnError: false }));
+      el.innerHTML = html;
+    });
+  }
+
+  // ── 学习台交互 ──
+  const questions = [
+    {
+      q: "以采样率 $f_s$ 对信号采样，能无失真恢复的最高信号频率是？",
+      opts: ["$f_s$", "$\\dfrac{f_s}{2}$", "$2f_s$", "$\\dfrac{f_s}{4}$"],
+      ans: 1,
+      why: "奈奎斯特定理：恢复需要每个周期至少两个采样点，所以上限是采样率的一半。超过它的频率成分会混叠消失。"
+    },
+    {
+      q: "采样率不足时，高出上限的频率成分会怎样？",
+      opts: ["直接变成 0", "能量消失，波形变平", "伪装成更低频率（混叠）", "叠加到直流分量上"],
+      ans: 2,
+      why: "混叠的本质：采样后的离散序列无法区分 $f$ 和 $f_s - f$，高频率「冒名顶替」成低频率出现。"
+    },
+    {
+      q: "$\\int_{-\\pi}^{\\pi}\\sin(mx)\\sin(nx)\\,dx = 0$（$m \\ne n$）最直观的几何理解是？",
+      opts: ["对称区间奇函数相消", "两个不同频率的正弦波互不包含对方分量", "三角恒等式展开后余项为零", "正弦函数有界"],
+      ans: 1,
+      why: "和内积视角一致：积分类似点积，不同频率正弦「垂直」，投影为零。选 A 只是计算巧合，选 C 是死记推导。"
+    }
+  ];
+  let qi = 0, answered = false;
+  const fb = document.getElementById("quiz-fb");
+  const btnNext = document.getElementById("btn-next");
+
+  function showQuestion() {
+    const item = questions[qi];
+    answered = false;
+    document.getElementById("q-idx").textContent = qi + 1;
+    document.querySelector("#quiz-area .quiz-q").textContent = item.q;
+    fb.className = "quiz-fb"; fb.innerHTML = "";
+    btnNext.disabled = true;
+    btnNext.textContent = qi < questions.length - 1 ? "下一题 →" : "完成本组 ✔";
+    const box = document.getElementById("quiz-opts"); box.innerHTML = "";
+    item.opts.forEach((o, i) => {
+      const b = document.createElement("button");
+      b.className = "opt";
+      b.innerHTML = window.katex ? katex.renderToString(o, { throwOnError: false }) : o;
+      b.onclick = () => pick(i, b);
+      box.appendChild(b);
+    });
+  }
+
+  function pick(i, el) {
+    if (answered) return;
+    answered = true;
+    const item = questions[qi];
+    const opts = document.querySelectorAll(".opt");
+    opts.forEach(b => b.disabled = true);
+    el.classList.add(i === item.ans ? "correct" : "wrong");
+    if (i !== item.ans) opts[item.ans].classList.add("correct");
+    const ok = i === item.ans;
+    fb.className = "quiz-fb " + (ok ? "ok" : "no");
+    fb.innerHTML = "<span class='verdict'>" + (ok ? "✅ 正确" : "❌ 答错了") + "</span> —— " + item.why;
+    btnNext.disabled = false;
+  }
+
+  btnNext.onclick = () => {
+    if (qi < questions.length - 1) { qi++; showQuestion(); }
+    else {
+      fb.className = "quiz-fb ok";
+      fb.innerHTML = "<span class='verdict'>本组完成</span> —— 结果已同步到依赖图与错题本（原型演示）。";
+      btnNext.disabled = true;
+    }
+  };
+
+  // 模式切换
+  document.querySelectorAll(".mode-btn").forEach(b => {
+    b.onclick = () => {
+      document.querySelectorAll(".mode-btn").forEach(x => x.classList.remove("active"));
+      b.classList.add("active");
+      const quiz = b.dataset.mode === "quiz";
+      document.getElementById("quiz-area").hidden = !quiz;
+      document.getElementById("free-area").hidden = quiz;
+    };
+  });
+  document.getElementById("btn-free-fallback").onclick = () =>
+    document.querySelector('[data-mode="free"]').click();
+  document.getElementById("btn-submit-free").onclick = () => {
+    if (!document.getElementById("free-input").value.trim()) return;
+    alert("原型演示：这段文字会交给 AI，对照依赖图判读你的理解边界，缺的节点回炉、新疑问记入错题本。");
+  };
+
+  window.addEventListener("load", () => {
+    renderMath();
+    const wait = setInterval(() => {
+      if (window.katex) { clearInterval(wait); showQuestion(); }
+    }, 120);
+  });
+</script>
+</body>
+</html>
