@@ -1,6 +1,6 @@
 {
   "name": "dsh-learn-space",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "学习空间：AI 辅导的个人学习面板。摸底定位 → 依赖图规划 → 逐节点教学 + quiz 确认，进度/笔记/错题/学习记录沉淀为 Markdown，支持导出自包含 HTML 学习报告。",
   "keywords": [
     "dsh",

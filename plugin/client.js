@@ -6,7 +6,7 @@ window.__ModuleLoader__.load({
   id: 'dsh-learn-space',
   factory(require) {
     const React = require('react')
-    const { useEffect, useState, useCallback, useRef } = React
+    const { useEffect, useState, useCallback, useMemo, useRef } = React
     const h = React.createElement
 
     const STATUS_COLOR = {
@@ -16,6 +16,243 @@ window.__ModuleLoader__.load({
       todo: '#9A968C',
     }
     const STATUS_LABEL = { done: '已确认', doing: '进行中', warn: '待修复', todo: '未学' }
+
+    // ── 轻量 toast：模块级队列 + 右下角栈，不引第三方运行时 ──
+    const toastStore = { items: [], listeners: new Set() }
+    let toastSeq = 0
+    const emitToasts = () => { for (const l of toastStore.listeners) l(toastStore.items) }
+    const dismissToast = id => {
+      const t = toastStore.items.find(x => x.id === id)
+      if (!t || t.leaving) return
+      toastStore.items = toastStore.items.map(x => x.id === id ? { ...x, leaving: true } : x)
+      emitToasts()
+      setTimeout(() => {
+        toastStore.items = toastStore.items.filter(x => x.id !== id)
+        emitToasts()
+      }, 180)
+    }
+    const pushToast = (type, title, desc) => {
+      const id = ++toastSeq
+      toastStore.items = [...toastStore.items, { id, type, title, desc }].slice(-3)
+      emitToasts()
+      setTimeout(() => dismissToast(id), 3200)
+      return id
+    }
+    const toast = {
+      success: (title, desc) => pushToast('success', title, desc),
+      error: (title, desc) => pushToast('error', title, desc),
+      warning: (title, desc) => pushToast('warning', title, desc),
+      info: (title, desc) => pushToast('info', title, desc),
+      loading: (title, desc) => pushToast('loading', title, desc),
+    }
+
+    function ToastGlyph({ type }) {
+      if (type === 'loading') {
+        return h('svg', {
+          className: 'ls-spin', viewBox: '0 0 24 24', width: 17, height: 17,
+          fill: 'none', stroke: 'currentColor', strokeWidth: 2.6, strokeLinecap: 'round',
+        },
+          h('circle', { cx: 12, cy: 12, r: 8, strokeOpacity: .3 }),
+          h('path', { d: 'M12 4a8 8 0 0 1 8 8' }))
+      }
+      const stroke = { fill: 'none', stroke: 'currentColor', strokeWidth: 3, strokeLinecap: 'round', strokeLinejoin: 'round' }
+      return h('svg', { viewBox: '0 0 24 24', width: 17, height: 17, ...stroke },
+        type === 'success' ? h('path', { d: 'M6 12.5l4 4 8-9' })
+        : type === 'error' ? h('path', { d: 'M7.5 7.5l9 9M16.5 7.5l-9 9' })
+        : type === 'warning' ? h('path', { d: 'M12 6v6.5M12 16.8v.7' })
+        : h('path', { d: 'M12 6.2v.7M12 10.5v7' }))
+    }
+
+    function ToastHost() {
+      const [items, setItems] = useState(toastStore.items)
+      useEffect(() => {
+        const fn = list => setItems(list)
+        toastStore.listeners.add(fn)
+        return () => { toastStore.listeners.delete(fn) }
+      }, [])
+      return h('div', { className: 'ls-toasts', 'aria-live': 'polite' },
+        items.map(t => h('div', { key: t.id, className: 'ls-toast' + (t.leaving ? ' leaving' : ''), 'data-type': t.type },
+          h('span', { className: `ls-toast-tile ${t.type}` }, h(ToastGlyph, { type: t.type })),
+          h('div', { className: 'ls-toast-body' },
+            h('div', { className: 'ls-toast-title' }, t.title),
+            t.desc ? h('div', { className: 'ls-toast-desc' }, t.desc) : null),
+          h('button', { className: 'ls-toast-x', type: 'button', 'aria-label': '关闭', onClick: () => dismissToast(t.id) }, '×'))))
+    }
+
+    // ── AI 状态行：闪烁文字 + 图标动画 + 秒表（AiStatus 的移植版） ──
+    const SPARKLE_PATH = 'M11 5Q12 12 19 13Q12 14 11 21Q10 14 3 13Q10 12 11 5Z'
+    const TWINKLE_PATH = 'M18 2Q18.4 4.6 21 5Q18.4 5.4 18 8Q17.6 5.4 15 5Q17.6 4.6 18 2Z'
+
+    function AiStatus({ state = 'thinking', label, detail, elapsed }) {
+      const busy = state === 'thinking' || state === 'tool'
+      const [secs, setSecs] = useState(0)
+      useEffect(() => {
+        if (!busy) return
+        const start = Date.now()
+        setSecs(0)
+        const id = setInterval(() => setSecs(Math.floor((Date.now() - start) / 1000)), 1000)
+        return () => clearInterval(id)
+      }, [busy])
+      const time = elapsed != null ? elapsed : (busy ? secs : null)
+      const icon = state === 'done'
+        ? h('svg', { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor',
+            strokeWidth: 2.4, strokeLinecap: 'round', strokeLinejoin: 'round' },
+            h('path', { className: 'ls-ai-check', d: 'M5 12.5L10 17.5L19 7' }))
+        : state === 'tool'
+          ? h('svg', { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'none', stroke: 'currentColor',
+              strokeWidth: 2.6, strokeLinecap: 'round' },
+              [6, 12, 18].map(x => h('line', {
+                key: x, className: 'ls-ai-bar', x1: x, y1: 18.5, x2: x, y2: 7.5,
+                style: { transformBox: 'fill-box', transformOrigin: 'center' },
+              })))
+          : h('svg', { viewBox: '0 0 24 24', width: 16, height: 16, fill: 'currentColor' },
+              h('path', { className: 'ls-ai-spark', d: SPARKLE_PATH }),
+              h('path', { className: 'ls-ai-spark2', d: TWINKLE_PATH }))
+      return h('div', { className: 'ls-aistatus' + (busy ? ' active' : ''), role: 'status', 'aria-busy': busy },
+        h('span', { className: 'ls-aistatus-icon' + (state === 'done' ? ' ls-aistatus-done' : '') }, icon),
+        h('span', { className: 'ls-aistatus-label' }, label || (busy ? '思考中' : '完成')),
+        detail ? h('span', { className: 'ls-aistatus-detail' }, detail) : null,
+        time != null && time > 0 ? h('span', { className: 'ls-aistatus-time' }, `${time}s`) : null)
+    }
+
+    // ── 课程剩余节点铃铛：数字徽标 + 换数时摆铃 + 点开列剩余节点 ──
+    const BELL_BODY = 'M3.5 6.5C3.5 3.46279 5.96279 1 9 1C12.0372 1 14.5 3.46279 14.5 6.5V10.75C14.5 11.4408 15.0592 12 15.75 12C16.1642 12 16.5 12.3358 16.5 12.75C16.5 13.1642 16.1642 13.5 15.75 13.5H2.25C1.83579 13.5 1.5 13.1642 1.5 12.75C1.5 12.3358 1.83579 12 2.25 12C2.94079 12 3.5 11.4408 3.5 10.75V6.5Z'
+    const BELL_CLAPPER = 'M10.2 15H7.80099C7.64999 15 7.50799 15.068 7.41299 15.185C7.31799 15.302 7.28099 15.456 7.31199 15.603C7.48499 16.425 8.17999 17 9.00099 17C9.82199 17 10.517 16.425 10.69 15.603C10.721 15.456 10.684 15.302 10.589 15.185C10.494 15.068 10.351 15 10.2 15Z'
+
+    function NotificationBell({ nodes }) {
+      const [open, setOpen] = useState(false)
+      const [ring, setRing] = useState(0)
+      const rootRef = useRef(null)
+      const todo = nodes.filter(n => n.status === 'todo')
+      const count = todo.length
+      const prevRef = useRef(count)
+      useEffect(() => {
+        if (count !== prevRef.current) { prevRef.current = count; setRing(r => r + 1) }
+      }, [count])
+      useEffect(() => {
+        if (!open) return
+        const onDown = e => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false) }
+        const onKey = e => { if (e.key === 'Escape') setOpen(false) }
+        document.addEventListener('pointerdown', onDown)
+        document.addEventListener('keydown', onKey)
+        return () => {
+          document.removeEventListener('pointerdown', onDown)
+          document.removeEventListener('keydown', onKey)
+        }
+      }, [open])
+      return h('div', { className: 'ls-bell-wrap', ref: rootRef },
+        h('button', {
+          className: 'ls-bell' + (open ? ' open' : ''), type: 'button',
+          'aria-expanded': open, 'aria-label': count ? `剩余 ${count} 个节点未学` : '所有节点已确认',
+          title: count ? `剩余 ${count} 个节点未学` : '所有节点已确认',
+          onClick: e => { e.stopPropagation(); setOpen(v => !v) },
+        },
+          h('svg', {
+            key: ring, className: ring ? 'ls-bell-swing' : '', viewBox: '0 0 18 18',
+            width: 17, height: 17, fill: 'currentColor', 'aria-hidden': true,
+          },
+            h('path', { fillOpacity: .55, d: BELL_BODY }),
+            h('path', { d: BELL_CLAPPER })),
+          count > 0 ? h('span', { className: 'ls-bell-badge' }, count > 99 ? '99+' : count) : null),
+        open ? h('div', { className: 'ls-bell-pop', onClick: e => e.stopPropagation() },
+          h('div', { className: 'ls-bell-pop-h' }, count ? `剩余 ${count} 个节点未学` : '所有节点已确认'),
+          count ? h('div', { className: 'ls-bell-pop-list' }, todo.map(n =>
+            h('div', { key: n.label, className: 'ls-bell-pop-item' },
+              h('span', { className: 'ls-dot', style: { background: STATUS_COLOR.todo, flex: 'none' } }),
+              cleanLabel(n.label)))) : null) : null)
+    }
+
+    // ── 模型选择：按 provider 分组的搜索式下拉（ModelPicker 的移植版） ──
+    function ModelPicker({ models, value, onChange, disabled, placeholder }) {
+      const [open, setOpen] = useState(false)
+      const [q, setQ] = useState('')
+      const [active, setActive] = useState(0)
+      const [dropUp, setDropUp] = useState(false)
+      const rootRef = useRef(null)
+      const triggerRef = useRef(null)
+      const inputRef = useRef(null)
+      const listRef = useRef(null)
+      const selected = models.find(m => m.provider === value.provider && m.modelId === value.model)
+      const filtered = useMemo(() => {
+        const s = q.trim().toLowerCase()
+        return s ? models.filter(m => `${m.name} ${m.providerName}`.toLowerCase().includes(s)) : models
+      }, [models, q])
+      const sections = []
+      filtered.forEach((m, i) => {
+        const last = sections[sections.length - 1]
+        if (last && last.name === m.providerName) last.items.push({ m, i })
+        else sections.push({ name: m.providerName, items: [{ m, i }] })
+      })
+
+      useEffect(() => { if (disabled) setOpen(false) }, [disabled])
+      useEffect(() => {
+        if (!open) { setQ(''); return }
+        const rect = triggerRef.current && triggerRef.current.getBoundingClientRect()
+        setDropUp(!!rect && rect.bottom + 300 > window.innerHeight && rect.top > 300)
+        setActive(Math.max(0, models.findIndex(m => m.provider === value.provider && m.modelId === value.model)))
+        if (inputRef.current) inputRef.current.focus()
+      }, [open])
+      useEffect(() => {
+        if (!open) return
+        const onDown = e => { if (rootRef.current && !rootRef.current.contains(e.target)) setOpen(false) }
+        document.addEventListener('pointerdown', onDown)
+        return () => document.removeEventListener('pointerdown', onDown)
+      }, [open])
+      useEffect(() => {
+        if (!open || !listRef.current) return
+        const row = listRef.current.querySelector(`[data-i="${active}"]`)
+        if (row) row.scrollIntoView({ block: 'nearest' })
+      }, [active, open])
+
+      const pick = m => {
+        onChange({ provider: m.provider, model: m.modelId })
+        setOpen(false)
+      }
+      const onKey = e => {
+        if (e.key === 'ArrowDown') { e.preventDefault(); setActive(i => (i + 1) % Math.max(1, filtered.length)) }
+        else if (e.key === 'ArrowUp') { e.preventDefault(); setActive(i => (i - 1 + filtered.length) % Math.max(1, filtered.length)) }
+        else if (e.key === 'Enter') { e.preventDefault(); if (filtered[active]) pick(filtered[active]) }
+        else if (e.key === 'Escape') { e.preventDefault(); setOpen(false) }
+      }
+      return h('div', { className: 'ls-mp' + (open ? ' open' : ''), ref: rootRef },
+        h('button', {
+          className: 'ls-mp-trigger', type: 'button', disabled, ref: triggerRef,
+          'aria-haspopup': 'listbox', 'aria-expanded': open,
+          onClick: () => setOpen(v => !v),
+          onKeyDown: e => { if (e.key === 'ArrowDown' || e.key === 'Enter') { e.preventDefault(); if (!disabled) setOpen(true) } },
+        },
+          h('span', { className: 'ls-mp-icon' }, (selected ? selected.providerName : '?').slice(0, 1)),
+          h('span', { className: 'ls-mp-name' }, selected ? selected.name : (placeholder || '选择模型')),
+          h('svg', { className: 'ls-mp-chev', viewBox: '0 0 12 12', width: 12, height: 12,
+            fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+            h('path', { d: 'M3 4.5L6 7.5L9 4.5', strokeLinecap: 'round', strokeLinejoin: 'round' }))),
+        open ? h('div', { className: 'ls-mp-panel' + (dropUp ? ' up' : ''), onKeyDown: onKey },
+          h('div', { className: 'ls-mp-search' },
+            h('svg', { viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', strokeWidth: 1.6 },
+              h('circle', { cx: 7, cy: 7, r: 4.5 }), h('path', { d: 'M10.5 10.5L14 14', strokeLinecap: 'round' })),
+            h('input', {
+              ref: inputRef, value: q, placeholder: '搜索模型', 'aria-label': '搜索模型',
+              onChange: e => { setQ(e.target.value); setActive(0) },
+            })),
+          h('div', { className: 'ls-mp-list', role: 'listbox', ref: listRef },
+            sections.length ? sections.map(s => h('div', { key: s.name, role: 'group' },
+              h('div', { className: 'ls-mp-group' }, s.name),
+              s.items.map(({ m, i }) => {
+                const sel = m.provider === value.provider && m.modelId === value.model
+                return h('div', {
+                  key: `${m.provider}-${m.modelId}`, role: 'option', 'aria-selected': sel,
+                  'data-i': i, className: 'ls-mp-item' + (i === active ? ' active' : ''),
+                  onMouseEnter: () => setActive(i),
+                  onMouseDown: e => e.preventDefault(),
+                  onClick: () => pick(m),
+                },
+                  h('span', { className: 'ls-mp-icon' }, m.providerName.slice(0, 1)),
+                  h('span', { className: 'ls-mp-item-name' }, m.name),
+                  sel ? h('svg', { className: 'ls-check', viewBox: '0 0 16 16', width: 13, height: 13,
+                    fill: 'none', stroke: 'currentColor', strokeWidth: 2, strokeLinecap: 'round', strokeLinejoin: 'round' },
+                    h('path', { d: 'M3 8.5l3.2 3.2L13 4.5' })) : null)
+              }))) : h('div', { className: 'ls-mp-empty' }, '没有匹配的模型'))) : null)
+    }
 
     function PanelIcon() {
       return h('svg', { viewBox: '0 0 24 24', width: 22, height: 22, 'aria-hidden': true },
@@ -54,7 +291,8 @@ window.__ModuleLoader__.load({
 .ls-node { display: flex; align-items: center; gap: 8px; padding: 3px 0; font-size: 13px; }
 .ls-journal-item { padding: 3px 0; font-size: 13px; color: var(--dsw-alias-label-secondary); }
 .ls-btn { font-family: inherit; font-size: 12px; padding: 3px 12px; cursor: pointer;
-  background: var(--dsw-alias-brand-primary); color: #fff; border: none; border-radius: 4px; flex: none; }
+  background: var(--dsw-alias-brand-primary); color: var(--dsw-alias-label-primary-foreground, #fff);
+  border: none; border-radius: 4px; flex: none; }
 .ls-btn:disabled { opacity: .5; cursor: default; }
 .ls-new { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .ls-input { flex: 1; min-width: 120px; font-family: inherit; font-size: 13px; color: var(--dsw-alias-label-primary);
@@ -78,8 +316,10 @@ window.__ModuleLoader__.load({
 .ls-chat-title { font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .ls-chat-list { max-height: 320px; overflow-y: auto; padding: 4px 2px; display: flex; flex-direction: column; gap: 8px; }
 .ls-msg { max-width: 88%; border-radius: 8px; padding: 6px 10px; font-size: 13px; }
-.ls-msg-user { align-self: flex-end; background: var(--dsw-alias-brand-primary); color: #fff; }
-.ls-msg-assistant { align-self: flex-start; background: var(--dsw-alias-bg-layer-2); }
+.ls-msg-user { align-self: flex-end; background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-label-primary-foreground, #fff); }
+.ls-msg-assistant { align-self: flex-start; background: var(--dsw-alias-bg-layer-2);
+  animation: ls-soft-in .24s ease-out; }
 .ls-msg-user .ls-md-code { background: rgba(255,255,255,.25); }
 .ls-md-p { margin: 2px 0; white-space: pre-wrap; word-break: break-word; }
 .ls-md-h { font-size: 13px; font-weight: 700; margin: 6px 0 2px; }
@@ -89,7 +329,6 @@ window.__ModuleLoader__.load({
   border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; overflow-x: auto; }
 .ls-md-pre code { font-family: Consolas, monospace; font-size: 12px; white-space: pre; }
 .ls-tool { align-self: flex-start; font-size: 12px; color: var(--dsw-alias-label-secondary); }
-.ls-thinking { align-self: flex-start; font-size: 12px; color: var(--dsw-alias-label-secondary); padding: 2px 4px; }
 .ls-chat-err { font-size: 12px; color: var(--dsw-alias-state-danger-primary, #B5432E); padding: 4px 0; }
 .ls-chat-row { display: flex; gap: 8px; margin-top: 8px; align-items: flex-end; }
 .ls-chat-input { flex: 1; resize: vertical; min-height: 34px; max-height: 120px; }
@@ -124,7 +363,7 @@ window.__ModuleLoader__.load({
 .ls-modal-body { font-size: 13px; color: var(--dsw-alias-label-secondary); line-height: 1.7; margin-bottom: 14px; }
 .ls-modal-body strong { color: var(--dsw-alias-state-danger-primary, #B5432E); }
 .ls-modal-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.ls-btn-danger { background: #B5432E; }
+.ls-btn-danger { background: #B5432E; color: #fff; }
 .ls-title-row { display: flex; align-items: center; gap: 10px; }
 .ls-title-row .ls-title { margin: 0 0 2px; }
 .ls-gear { border: 1px solid var(--dsw-alias-border-l1); background: var(--dsw-alias-bg-layer-1);
@@ -203,6 +442,140 @@ window.__ModuleLoader__.load({
 @media (max-width: 720px) {
   .ls-layout { grid-template-columns: 1fr; }
   .ls-side { position: static; }
+}
+
+/* ── AI 状态行（AiStatus） ───────────────────────── */
+.ls-aistatus { display: inline-flex; align-items: center; gap: 7px; align-self: flex-start;
+  height: 24px; font-size: 12px; color: var(--dsw-alias-label-secondary);
+  animation: ls-soft-in .24s ease-out; }
+.ls-aistatus-icon { display: inline-grid; place-items: center; width: 16px; height: 16px; flex: none; }
+.ls-aistatus-label { font-weight: 600; letter-spacing: .2px; }
+.ls-aistatus.active .ls-aistatus-label {
+  background-image: linear-gradient(90deg,
+    var(--dsw-alias-label-secondary) 42%,
+    var(--dsw-alias-label-primary) 50%,
+    var(--dsw-alias-label-secondary) 58%);
+  background-size: 250% 100%; -webkit-background-clip: text; background-clip: text; color: transparent;
+  animation: ls-shimmer 1.6s linear infinite; }
+.ls-aistatus-detail, .ls-aistatus-time { color: var(--dsw-alias-label-secondary); opacity: .72; font-weight: 500; }
+.ls-aistatus-time { font-variant-numeric: tabular-nums; }
+.ls-aistatus-done { color: var(--dsw-alias-state-success-primary); }
+.ls-ai-spark { transform-origin: 11px 13px; animation: ls-spark 2.4s ease-in-out infinite; }
+.ls-ai-spark2 { transform-origin: 18px 5px; animation: ls-spark2 1.2s ease-in-out infinite; }
+.ls-ai-bar { animation: ls-bar .9s ease-in-out infinite; }
+.ls-ai-bar:nth-child(2) { animation-delay: .15s; }
+.ls-ai-bar:nth-child(3) { animation-delay: .3s; }
+.ls-ai-check { stroke-dasharray: 22; stroke-dashoffset: 22; animation: ls-draw .45s ease-out .05s forwards; }
+@keyframes ls-shimmer { from { background-position: 100% 0; } to { background-position: 0% 0; } }
+@keyframes ls-soft-in { from { opacity: 0; transform: translateY(3px); } to { opacity: 1; transform: none; } }
+@keyframes ls-spark { 0%, 100% { transform: rotate(0) scale(1); } 50% { transform: rotate(90deg) scale(.82); } }
+@keyframes ls-spark2 { 0%, 100% { transform: scale(.5); opacity: .35; } 50% { transform: scale(1); opacity: 1; } }
+@keyframes ls-bar { 0%, 100% { transform: scaleY(.35); } 50% { transform: scaleY(1); } }
+@keyframes ls-draw { to { stroke-dashoffset: 0; } }
+
+/* ── 剩余节点铃铛（NotificationBell） ─────────────── */
+.ls-bell-wrap { position: relative; flex: none; }
+.ls-bell { position: relative; display: grid; place-items: center; width: 30px; height: 30px;
+  padding: 0; border: 1px solid var(--dsw-alias-border-l1); border-radius: 50%;
+  background: var(--dsw-alias-bg-layer-1); color: var(--dsw-alias-label-secondary); cursor: pointer;
+  transition: border-color .15s, color .15s, transform .08s; }
+.ls-bell:hover { border-color: var(--dsw-alias-border-l2); color: var(--dsw-alias-label-primary); }
+.ls-bell:active { transform: scale(.94); }
+.ls-bell.open { border-color: var(--dsw-alias-brand-primary); color: var(--dsw-alias-brand-primary); }
+.ls-bell-badge { position: absolute; top: -4px; right: -4px; min-width: 16px; height: 16px; padding: 0 4px;
+  border-radius: 8px; background: #B5432E; color: #fff; font-size: 10px; font-weight: 700;
+  line-height: 1; display: grid; place-items: center; animation: ls-badge-pop .3s ease-out; }
+.ls-bell-swing { animation: ls-bell-ring .9s ease-in-out; transform-origin: 50% 12%; }
+.ls-bell-pop { position: absolute; top: calc(100% + 8px); right: 0; width: 240px; z-index: 80;
+  padding: 10px 12px; background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0,0,0,.16); transform-origin: top right;
+  animation: ls-pop-in .22s cubic-bezier(.2,.85,.25,1); }
+.ls-bell-pop-h { font-size: 12px; font-weight: 600; margin-bottom: 6px; }
+.ls-bell-pop-list { display: flex; flex-direction: column; gap: 1px; max-height: 220px; overflow-y: auto; }
+.ls-bell-pop-item { display: flex; align-items: center; gap: 7px; padding: 3px 0;
+  font-size: 12px; color: var(--dsw-alias-label-secondary); }
+@keyframes ls-bell-ring {
+  0% { transform: rotate(0); } 15% { transform: rotate(14deg); } 30% { transform: rotate(-12deg); }
+  45% { transform: rotate(9deg); } 60% { transform: rotate(-6deg); } 80% { transform: rotate(3deg); }
+  100% { transform: rotate(0); } }
+@keyframes ls-badge-pop { 0% { transform: scale(.4); opacity: 0; } 60% { transform: scale(1.15); } 100% { transform: scale(1); opacity: 1; } }
+@keyframes ls-pop-in { from { opacity: 0; transform: translateY(-4px) scale(.97); } to { opacity: 1; transform: none; } }
+
+/* ── 模型选择（ModelPicker） ─────────────────────── */
+.ls-mp { position: relative; }
+.ls-mp-trigger { display: flex; align-items: center; gap: 8px; width: 100%; height: 34px;
+  padding: 0 12px 0 8px; font-family: inherit; font-size: 13px; text-align: left;
+  color: var(--dsw-alias-label-primary); background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 17px; cursor: pointer;
+  transition: border-color .15s; }
+.ls-mp-trigger:hover:not(:disabled) { border-color: var(--dsw-alias-border-l2); }
+.ls-mp-trigger:disabled { opacity: .5; cursor: default; }
+.ls-mp.open .ls-mp-trigger { border-color: var(--dsw-alias-brand-primary); }
+.ls-mp-icon { display: grid; place-items: center; width: 20px; height: 20px; flex: none;
+  border-radius: 6px; background: var(--dsw-alias-bg-layer-2); text-transform: uppercase;
+  font-size: 10px; font-weight: 700; color: var(--dsw-alias-label-secondary); }
+.ls-mp-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ls-mp-chev { flex: none; transition: transform .18s; }
+.ls-mp.open .ls-mp-chev { transform: rotate(180deg); }
+.ls-mp-panel { position: absolute; top: calc(100% + 6px); left: 0; width: 100%; min-width: 268px;
+  z-index: 90; overflow: hidden; background: var(--dsw-alias-bg-layer-1);
+  border: 1px solid var(--dsw-alias-border-l1); border-radius: 12px;
+  box-shadow: 0 12px 36px rgba(0,0,0,.18);
+  animation: ls-pop-in .22s cubic-bezier(.2,.85,.25,1); }
+.ls-mp-panel.up { top: auto; bottom: calc(100% + 6px); transform-origin: bottom left; }
+.ls-mp-search { display: flex; align-items: center; gap: 7px; height: 38px; padding: 0 12px;
+  border-bottom: 1px solid var(--dsw-alias-border-l1); color: var(--dsw-alias-label-secondary); }
+.ls-mp-search input { flex: 1; min-width: 0; border: none; outline: none; background: transparent;
+  font-family: inherit; font-size: 12px; color: var(--dsw-alias-label-primary); }
+.ls-mp-list { max-height: 248px; overflow-y: auto; padding: 6px; }
+.ls-mp-group { padding: 6px 8px 3px; font-size: 11px; letter-spacing: .5px;
+  color: var(--dsw-alias-label-secondary); }
+.ls-mp-item { display: flex; align-items: center; gap: 8px; height: 34px; padding: 0 8px;
+  border-radius: 8px; font-size: 13px; color: var(--dsw-alias-label-primary); cursor: pointer; }
+.ls-mp-item.active { background: var(--dsw-alias-bg-layer-2); }
+.ls-mp-item-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ls-mp-item .ls-check { color: var(--dsw-alias-brand-primary); flex: none; }
+.ls-mp-empty { padding: 14px 8px; text-align: center; font-size: 12px; color: var(--dsw-alias-label-secondary); }
+
+/* ── Toast ──────────────────────────────────────── */
+.ls-toasts { position: fixed; right: 18px; bottom: 18px; z-index: 240; display: flex;
+  flex-direction: column-reverse; gap: 10px; width: 304px; max-width: calc(100vw - 36px);
+  pointer-events: none; }
+.ls-toast { pointer-events: auto; display: flex; align-items: center; gap: 10px; padding: 10px;
+  background: var(--dsw-alias-bg-layer-1); border: 1px solid var(--dsw-alias-border-l1);
+  border-radius: 14px; box-shadow: 0 6px 24px rgba(0,0,0,.14);
+  animation: ls-toast-in .3s cubic-bezier(.2,.85,.25,1); }
+.ls-toast.leaving { animation: ls-toast-out .18s ease-in forwards; }
+.ls-toast-tile { display: grid; place-items: center; width: 34px; height: 34px; flex: none;
+  border-radius: 11px; color: #fff; }
+.ls-toast-tile.success { background: var(--dsw-alias-state-success-primary); }
+.ls-toast-tile.error { background: var(--dsw-alias-state-danger-primary, #B5432E); }
+.ls-toast-tile.warning { background: var(--dsw-alias-state-warning-primary, #B7791F); }
+.ls-toast-tile.info { background: var(--dsw-alias-brand-primary);
+  color: var(--dsw-alias-label-primary-foreground, #fff); }
+.ls-toast-tile.loading { background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-secondary); }
+.ls-toast-body { flex: 1; min-width: 0; }
+.ls-toast-title { font-size: 13px; font-weight: 600; line-height: 1.35; }
+.ls-toast-desc { margin-top: 1px; font-size: 12px; line-height: 1.5;
+  color: var(--dsw-alias-label-secondary); word-break: break-word; }
+.ls-toast-x { flex: none; border: none; background: none; padding: 2px 4px; cursor: pointer;
+  font-size: 14px; line-height: 1; color: var(--dsw-alias-label-secondary); }
+.ls-toast-x:hover { color: var(--dsw-alias-label-primary); }
+.ls-spin { animation: ls-spin .9s linear infinite; }
+@keyframes ls-spin { to { transform: rotate(360deg); } }
+@keyframes ls-toast-in { from { opacity: 0; transform: translateY(10px) scale(.96); } to { opacity: 1; transform: none; } }
+@keyframes ls-toast-out { to { opacity: 0; transform: translateX(8px) scale(.97); } }
+
+/* 按钮反馈 */
+.ls-btn { transition: background-color .15s, border-color .15s, transform .08s; }
+.ls-btn:active:not(:disabled) { transform: translateY(1px) scale(.99); }
+.ls-btn:focus-visible { outline: 2px solid var(--dsw-alias-brand-primary); outline-offset: 1px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .ls-aistatus, .ls-aistatus-label, .ls-ai-spark, .ls-ai-spark2, .ls-ai-bar, .ls-ai-check,
+  .ls-toast, .ls-bell-swing, .ls-bell-badge, .ls-bell-pop, .ls-mp-panel, .ls-spin {
+    animation: none !important; }
 }
 `
 
@@ -448,6 +821,9 @@ window.__ModuleLoader__.load({
       const inFlightRef = useRef(false)
       const pendingIdRef = useRef(0)
       const listRef = useRef(null)
+      const [doneInfo, setDoneInfo] = useState(null)
+      const prevRunningRef = useRef(false)
+      const runStartRef = useRef(null)
 
       const poll = useCallback(async () => {
         if (inFlightRef.current) return
@@ -495,7 +871,20 @@ window.__ModuleLoader__.load({
       }, [topic, phase])
 
       useEffect(() => { poll(); const t = setInterval(poll, 2500); return () => clearInterval(t) }, [poll])
-      useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight }, [messages, running])
+      // running 由 true→false 视为一轮结束：记下用时并短暂展示完成态
+      useEffect(() => {
+        if (running && !prevRunningRef.current) runStartRef.current = Date.now()
+        if (!running && prevRunningRef.current && runStartRef.current) {
+          const sec = Math.max(1, Math.round((Date.now() - runStartRef.current) / 1000))
+          runStartRef.current = null
+          setDoneInfo({ sec })
+          prevRunningRef.current = running
+          const t = setTimeout(() => setDoneInfo(null), 2600)
+          return () => clearTimeout(t)
+        }
+        prevRunningRef.current = running
+      }, [running])
+      useEffect(() => { if (listRef.current) listRef.current.scrollTop = listRef.current.scrollHeight }, [messages, running, doneInfo])
 
       // 发文本（输入框与 QuizCard 点选共用）：失败里 409 = 绑定会话已失效
       const sendText = async (text) => {
@@ -517,10 +906,11 @@ window.__ModuleLoader__.load({
             poll()
             return true
           }
-          if (j.error === 'session gone, start first') { setErr('会话已失效'); setNeedRebind(true); return false }
-          setErr(j.error)
-          return false
-        } catch (e) { setErr(String(e)); return false }
+          if (j.error === 'session gone, start first') {
+            setErr('会话已失效'); setNeedRebind(true); toast.warning('会话已失效', '点「重新绑定」即可继续'); return false
+          }
+          setErr(j.error); toast.error('发送失败', j.error); return false
+        } catch (e) { setErr(String(e)); toast.error('发送失败', String(e)); return false }
         finally { setSending(false) }
       }
 
@@ -546,11 +936,20 @@ window.__ModuleLoader__.load({
             setMessages([])
             lastSeqRef.current = null
             poll()
+            toast.success('会话已重新绑定')
           } else setErr(j.error || '重新绑定失败')
         } catch (e) { setErr(String(e)) }
       }
 
       const last = messages[messages.length - 1]
+      const toolMsg = running && last && last.role === 'tool' && last.state !== 'done' && last.state !== 'error' ? last : null
+      const statusNode = doneInfo && !running
+        ? h(AiStatus, { state: 'done', label: '完成', elapsed: doneInfo.sec })
+        : toolMsg
+          ? h(AiStatus, { state: 'tool', label: '正在调用工具', detail: toolMsg.toolName || '工具' })
+          : running && (!last || last.role !== 'assistant')
+            ? h(AiStatus, { state: 'thinking', label: '思考中' })
+            : null
       return h('div', {
         className: 'ls-chat',
         // 点击对话窗（输入框/按钮/滚动）不冒泡到卡片折叠区，否则一点输入框整块就收起
@@ -596,8 +995,7 @@ window.__ModuleLoader__.load({
                 ? h(QuizCard, { quiz: m.quiz, sending, onAnswer: sendText })
                 : m.role === 'assistant' ? markdownLite(m.text) : m.text)
           }),
-          running && (!last || last.role !== 'assistant')
-            ? h('div', { className: 'ls-thinking' }, '思考中…') : null),
+          running || doneInfo ? statusNode : null),
         err ? h('div', { className: 'ls-chat-err' }, `出错：${err}，可点「在会话中打开」继续`) : null,
         needRebind ? h('button', { className: 'ls-btn ls-rebind', type: 'button', onClick: rebind }, '会话已失效，重新绑定') : null,
         h('div', { className: 'ls-chat-row' },
@@ -674,9 +1072,13 @@ window.__ModuleLoader__.load({
       const doUpload = async files => {
         setUploading(true); setPct(0); setErr(null)
         try {
-          await uploadFiles(topic.name, files, p => setPct(Math.round(p * 100)))
+          const res = await uploadFiles(topic.name, files, p => setPct(Math.round(p * 100)))
+          toast.success('材料已导入', `${(res && res.files ? res.files.length : files.length) || files.length} 个文件`)
           onRefresh()
-        } catch (e) { setErr(String(e.message || e)) }
+        } catch (e) {
+          const msg = String(e.message || e)
+          setErr(msg); toast.error('上传失败', msg)
+        }
         finally { setUploading(false) }
       }
       return h('div', { className: 'ls-section' },
@@ -787,7 +1189,7 @@ window.__ModuleLoader__.load({
       return h('div', { className: 'ls-detail' },
         h('div', { className: 'ls-detail-head' },
           h('span', { className: 'ls-name' }, topic.name),
-          h('span', { style: { display: 'flex', gap: 10, alignItems: 'baseline' } },
+          h('span', { style: { display: 'flex', gap: 10, alignItems: 'center' } },
             h('span', { className: 'ls-frac' }, phase === 1 ? '阶段一 · 摸底' : `${done}/${total} 已确认`),
             h('a', {
               className: 'ls-btn', href: `/api/learning-space/export?topic=${encodeURIComponent(topic.name)}`,
@@ -802,7 +1204,8 @@ window.__ModuleLoader__.load({
               className: 'ls-btn', title: '新建学习会话，从学习方案开头重新教；旧会话保留在会话列表',
               disabled: starting,
               onClick: () => onStart(topic.name, 2, true),
-            }, starting ? '…' : '重新学习 ↻') : null)),
+            }, starting ? '…' : '重新学习 ↻') : null,
+            topic.nodes.length ? h(NotificationBell, { nodes: topic.nodes }) : null)),
         topic.goal ? h('div', { className: 'ls-goal' }, topic.goal) : null,
         h('div', { className: 'ls-bar' }, h('div', { className: 'ls-bar-fill', style: { width: pct + '%' } })),
         h('div', { className: 'ls-badges' },
@@ -896,7 +1299,8 @@ window.__ModuleLoader__.load({
           h('div', { className: 'ls-focus-head' },
             h('button', { className: 'ls-btn', type: 'button', onClick: onBack }, '← 返回'),
             h('span', { className: 'ls-focus-title', title: topic.name }, topic.name),
-            h('span', { className: 'ls-frac' }, `${done}/${total} 已确认`)),
+            h('span', { className: 'ls-frac' }, `${done}/${total} 已确认`),
+            topic.nodes.length ? h(NotificationBell, { nodes: topic.nodes }) : null),
           h(NodeAccordion, { topic }),
           h(MaterialList, { topic, onRefresh })),
         h('div', { className: 'ls-focus-right' },
@@ -1006,12 +1410,12 @@ window.__ModuleLoader__.load({
       const groups = (catalog && Array.isArray(catalog.groups)) ? catalog.groups : []
       const group = groups.find(g => g.id === provider)
       const models = group ? (group.models || []) : []
-
-      const onProviderChange = id => {
-        setProvider(id)
-        const g = groups.find(x => x.id === id)
-        setModel((g && (g.models || [])[0]) ? g.models[0].id : '')
-      }
+      const pickerModels = useMemo(() => groups.flatMap(g => (g.models || []).map(m => ({
+        provider: g.id,
+        providerName: g.name || g.id,
+        modelId: m.id,
+        name: m.name || m.id,
+      }))), [catalog])
 
       const save = async () => {
         if (busy) return
@@ -1031,8 +1435,12 @@ window.__ModuleLoader__.load({
               applyToTopic: applyNow && currentTopic ? currentTopic : undefined }),
           })
           const j = await r.json()
-          if (!j.ok) { setErr(j.error || '保存失败'); return }
-          if (j.applyError) { setApplyNotice(`已保存，但应用到会话失败：${j.applyError}`); return }
+          if (!j.ok) { setErr(j.error || '保存失败'); toast.error('保存失败', j.error || ''); return }
+          if (j.applyError) {
+            const msg = `已保存，但应用到会话失败：${j.applyError}`
+            setApplyNotice(msg); toast.warning('已保存', msg); return
+          }
+          toast.success('模型设置已保存', sel ? `${sel.provider} / ${sel.model}` : '跟随宿主默认')
           onClose(true)
         } catch (e) { setErr(String(e)) }
         finally { setBusy(false) }
@@ -1046,24 +1454,29 @@ window.__ModuleLoader__.load({
             catalog === undefined ? h('div', { className: 'ls-empty' }, '加载模型目录…') : [
               h('label', { key: 'follow', className: 'ls-set-check' },
                 h('input', { type: 'checkbox', checked: followDefault,
-                  onChange: e => setFollowDefault(e.target.checked) }),
+                  onChange: e => {
+                    const on = e.target.checked
+                    setFollowDefault(on)
+                    // 取消跟随默认且尚未选过：落到目录里的第一个模型，避免空选
+                    if (!on && !provider && pickerModels.length) {
+                      setProvider(pickerModels[0].provider)
+                      setModel(pickerModels[0].modelId)
+                    }
+                  } }),
                 '跟随宿主默认模型'),
               followDefault && catalog && catalog.default
                 ? h('div', { key: 'def', className: 'ls-set-note' },
                   `当前默认：${catalog.default.provider} / ${catalog.default.model}`)
                 : null,
-              h('label', { key: 'prov', className: 'ls-set-label' }, 'Provider'),
-              h('select', {
-                key: 'provsel', className: 'ls-select', value: provider,
-                disabled: followDefault || catalogDown, onChange: e => onProviderChange(e.target.value),
-              }, catalogDown ? null : groups.map(g =>
-                h('option', { key: g.id, value: g.id }, g.name || g.id))),
               h('label', { key: 'mdl', className: 'ls-set-label' }, '模型'),
-              h('select', {
-                key: 'mdlsel', className: 'ls-select', value: model,
-                disabled: followDefault || catalogDown || !provider, onChange: e => setModel(e.target.value),
-              }, catalogDown ? null : models.map(m =>
-                h('option', { key: m.id, value: m.id }, m.name || m.id))),
+              h(ModelPicker, {
+                key: 'picker',
+                models: pickerModels,
+                value: { provider, model },
+                disabled: followDefault || catalogDown,
+                placeholder: catalogDown ? '模型目录不可用' : '选择模型',
+                onChange: sel => { setProvider(sel.provider); setModel(sel.model) },
+              }),
               h('label', { key: 'apply', className: 'ls-set-check' },
                 h('input', { type: 'checkbox', checked: applyNow, disabled: !currentTopic,
                   onChange: e => setApplyNow(e.target.checked) }),
@@ -1107,15 +1520,21 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ topic: t, goal: goal.trim() }),
           })
           const j = await r.json()
-          if (!j.ok) { setErr(j.error || '创建失败'); return }
+          if (!j.ok) { setErr(j.error || '创建失败'); toast.error('创建失败', j.error || ''); return }
           // 第二步：对所选文件上传（失败有补救路径：课程已建成，详情区可再导入）
           if (files.length) {
             try { await uploadFiles(t, files) }
-            catch (e2) { setErr(`课程已创建，但材料上传失败：${e2.message || e2}`) }
+            catch (e2) {
+              const msg = `课程已创建，但材料上传失败：${e2.message || e2}`
+              setErr(msg); toast.warning('材料上传失败', msg)
+            }
           }
           setName(''); setGoal(''); setFiles([])
           onCreated(t)
-        } catch (e2) { setErr(String(e2)) }
+          toast.success('课程已创建', files.length ? `${t} · ${files.length} 个材料` : t)
+        } catch (e2) {
+          setErr(String(e2)); toast.error('创建失败', String(e2))
+        }
         finally { setBusy(false) }
       }
       return h('form', { className: 'ls-new', onSubmit: submit, style: { flexDirection: 'column' } },
@@ -1186,9 +1605,15 @@ window.__ModuleLoader__.load({
             setSelectedTopic(topic)        // 切到该课程详情
             setChatTopic(topic)            // 详情区展开内嵌对话窗（单窗互斥；窗内按 topic.phase 路由）
             setStudyView(topic)            // 直接进入专注学习页（左知识右问答，可返回）
+            toast.success(phase === 1 ? '摸底会话已创建' : '学习会话已创建', topic)
             load()
-          } else setError(j.error || '创建会话失败')
-        } catch (e) { setError(String(e)) }
+          } else {
+            setError(j.error || '创建会话失败')
+            toast.error('创建会话失败', j.error || '')
+          }
+        } catch (e) {
+          setError(String(e)); toast.error('创建会话失败', String(e))
+        }
         finally { setStarting(null) }
       }, [load])
 
@@ -1201,8 +1626,9 @@ window.__ModuleLoader__.load({
             body: JSON.stringify({ topic, enabled }),
           })
           const j = await r.json()
-          if (!j.ok) setError(j.error || '设置失败')
-          else load()
+          if (!j.ok) { setError(j.error || '设置失败'); toast.error('设置失败', j.error || ''); return }
+          toast.info(enabled ? '已开启联网检索' : '已关闭联网检索', '对下一次新建会话生效')
+          load()
         } catch (e) { setError(String(e)) }
       }, [load])
 
@@ -1218,11 +1644,18 @@ window.__ModuleLoader__.load({
           })
           const j = await r.json()
           if (j.ok) {
+            const name = deleting.name
             setDeleting(null)
             if (selectedTopic === deleting.name) { setSelectedTopic(null); setChatTopic(null) }
+            toast.success('课程已删除', name)
             load()
-          } else setError(j.error || '删除失败')
-        } catch (e) { setError(String(e)) }
+          } else {
+            setError(j.error || '删除失败')
+            toast.error('删除失败', j.error || '')
+          }
+        } catch (e) {
+          setError(String(e)); toast.error('删除失败', String(e))
+        }
         finally { setDeleting(d => d && { ...d, busy: false }) }
       }, [deleting, selectedTopic, load])
 
@@ -1231,6 +1664,7 @@ window.__ModuleLoader__.load({
       const studyTopic = studyView && data ? data.topics.find(t => t.name === studyView) : null
       if (studyTopic) return h('div', { className: 'ls-panel' },
         h('style', null, css),
+        h(ToastHost),
         error ? h('div', { className: 'ls-empty' }, `出错：${error}`) : null,
         h(StudyFocusView, {
           topic: studyTopic,
@@ -1241,6 +1675,7 @@ window.__ModuleLoader__.load({
       )
       return h('div', { className: 'ls-panel' },
         h('style', null, css),
+        h(ToastHost),
         h('div', { className: 'ls-title-row' },
           h('h1', { className: 'ls-title' }, '学习空间'),
           h('button', {
