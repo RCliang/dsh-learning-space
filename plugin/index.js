@@ -1201,6 +1201,7 @@ export function apply(ctx, config) {
           if (!args.topic || !args.summary) throw new Error('缺少 topic 或 summary')
           const month = today.slice(0, 7)
           const file = path.join(root, 'journal', `${month}.md`)
+          await mkdir(path.dirname(file), { recursive: true })
           let text = `# 学习日志（${month}）\n`
           try { text = await readFile(file, 'utf8') } catch { /* 新建 */ }
           text += `- ${today} · ${args.topic} · ${args.node || '-'} · ${args.summary}\n`
