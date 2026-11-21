@@ -328,6 +328,11 @@ window.__ModuleLoader__.load({
 .ls-md-pre { margin: 4px 0; padding: 8px 10px; background: var(--dsw-alias-bg-layer-1);
   border: 1px solid var(--dsw-alias-border-l1); border-radius: 6px; overflow-x: auto; }
 .ls-md-pre code { font-family: Consolas, monospace; font-size: 12px; white-space: pre; }
+.ls-math { white-space: normal; }
+.ls-math-block { display: block; margin: 6px 0; padding: 2px 0; overflow-x: auto; overflow-y: hidden; text-align: center; }
+.ls-math-block .katex-display { margin: 0; }
+.ls-math-fallback { font-family: Consolas, monospace; font-size: 12px; white-space: pre-wrap;
+  color: var(--dsw-alias-state-warning-primary, #b7791f); }
 .ls-tool { align-self: flex-start; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .ls-chat-err { font-size: 12px; color: var(--dsw-alias-state-danger-primary, #B5432E); padding: 4px 0; }
 .ls-chat-row { display: flex; gap: 8px; margin-top: 8px; align-items: flex-end; }
@@ -692,29 +697,75 @@ window.__ModuleLoader__.load({
       )
     }
 
-    /** 行内 markdown：**加粗** 与 `行内码`，其余按原文本 */
+    /** KaTeX 模块级 Promise 单例：注入样式表 + UMD，失败记 katexFailed 不再重试 */
+    let katexPromise = null
+    let katexFailed = false
+    function loadKatex() {
+      if (katexFailed) return Promise.reject(new Error('katex asset failed'))
+      if (!katexPromise) {
+        katexPromise = new Promise((resolve, reject) => {
+          const link = document.createElement('link')
+          link.rel = 'stylesheet'
+          link.href = '/api/learning-space/assets/katex/katex.min.css'
+          document.head.appendChild(link)
+          const s = document.createElement('script')
+          s.src = '/api/learning-space/assets/katex/katex.min.js'
+          s.onload = () => {
+            if (window.katex) resolve(window.katex)
+            else { katexFailed = true; katexPromise = null; reject(new Error('katex 未挂载')) }
+          }
+          s.onerror = () => { katexFailed = true; katexPromise = null; reject(new Error('katex 资产加载失败')) }
+          document.head.appendChild(s)
+        })
+      }
+      return katexPromise
+    }
+
+    /** LaTeX 公式：katex.render 写进 ref 元素（不拼用户文本进 innerHTML），失败降级显示原始 TeX */
+    function MathNode({ tex, block }) {
+      const ref = useRef(null)
+      const [failed, setFailed] = useState(false)
+      useEffect(() => {
+        let alive = true
+        loadKatex().then(k => {
+          if (!alive || !ref.current) return
+          k.render(tex, ref.current, { displayMode: !!block, throwOnError: false, strict: false })
+        }).catch(() => { if (alive) setFailed(true) })
+        return () => { alive = false }
+      }, [tex, block])
+      if (failed) return h('code', { className: 'ls-math-fallback' }, block ? `$$${tex}$$` : `$${tex}$`)
+      return h(block ? 'div' : 'span', { className: block ? 'ls-math ls-math-block' : 'ls-math', ref })
+    }
+
+    /** 行内 markdown：**加粗**、`行内码`、$$…$$ / $…$ / \(…\) 公式，其余按原文本 */
     function inlineNodes(text, keyBase) {
+      const src = String(text == null ? '' : text)
       const out = []
-      const re = /(\*\*[^*]+\*\*|`[^`]+`)/g
+      const re = /(\*\*[^*]+\*\*|`[^`]+`|\$\$[^$\n]+?\$\$|(?<!\\)\$(?![\s$])[^$\n]+?(?<![\s\\])\$(?!\d)|\\\((?:[^\\\n]|\\.)+?\\\)|\\\[(?:[^\\\n]|\\.)+?\\\])/g
       let last = 0, m, i = 0
-      while ((m = re.exec(text))) {
-        if (m.index > last) out.push(text.slice(last, m.index))
+      while ((m = re.exec(src))) {
+        if (m.index > last) out.push(src.slice(last, m.index))
         const t = m[0]
         if (t.startsWith('**')) out.push(h('strong', { key: `${keyBase}b${i}` }, t.slice(2, -2)))
-        else out.push(h('code', { key: `${keyBase}c${i}`, className: 'ls-md-code' }, t.slice(1, -1)))
+        else if (t.startsWith('`')) out.push(h('code', { key: `${keyBase}c${i}`, className: 'ls-md-code' }, t.slice(1, -1)))
+        else if (t.startsWith('$$')) out.push(h(MathNode, { key: `${keyBase}m${i}`, tex: t.slice(2, -2), block: false }))
+        else if (t.startsWith('$')) out.push(h(MathNode, { key: `${keyBase}m${i}`, tex: t.slice(1, -1), block: false }))
+        else out.push(h(MathNode, { key: `${keyBase}m${i}`, tex: t.slice(2, -2), block: false }))
         last = m.index + t.length
         i++
       }
-      if (last < text.length) out.push(text.slice(last))
+      if (last < src.length) out.push(src.slice(last))
       return out
     }
 
-    /** 极简 markdown → React 元素数组（代码块/标题/列表/加粗/行内码），无法识别的行原样输出 */
+    /** 极简 markdown → React 元素数组（代码块/块级公式/标题/列表/加粗/行内码/行内公式），无法识别的行原样输出 */
     function markdownLite(text) {
       const lines = String(text || '').split(/\r?\n/)
       const els = []
       let code = null
       let list = null
+      let math = null
+      let mathClose = null
       let k = 0
       const flushCode = () => {
         if (code) { els.push(h('pre', { key: `pre${k++}`, className: 'ls-md-pre' }, h('code', null, code.join('\n')))); code = null }
@@ -722,6 +773,13 @@ window.__ModuleLoader__.load({
       const flushList = () => {
         if (list && list.length) { els.push(h('ul', { key: `ul${k++}`, className: 'ls-md-ul' }, list.map((li, i) => h('li', { key: i }, li)))); list = null }
       }
+      const flushMath = () => {
+        if (!math) return
+        const tex = math.join('\n').trim()
+        math = null; mathClose = null
+        if (tex) els.push(h(MathNode, { key: `m${k++}`, tex, block: true }))
+      }
+      const pushMath = (tex) => { els.push(h(MathNode, { key: `m${k++}`, tex, block: true })) }
       for (const line of lines) {
         if (/^\s*```/.test(line)) {
           if (code) flushCode()
@@ -729,6 +787,33 @@ window.__ModuleLoader__.load({
           continue
         }
         if (code) { code.push(line); continue }
+        if (math) {
+          const closeAt = line.search(mathClose)
+          if (closeAt >= 0) {
+            const before = line.slice(0, closeAt)
+            if (before.trim()) math.push(before)
+            flushMath()
+          } else math.push(line)
+          continue
+        }
+        // 块级公式：$$…$$ 或 \[…\]，同行闭合且后面没正文才当块，否则交给行内处理（免得吞掉尾部文字）
+        const openAt = /^\s*(?:\$\$|\\\[)/.test(line) ? (/^\s*\$\$/.test(line) ? line.indexOf('$$') : line.indexOf('\\[')) : -1
+        if (openAt >= 0) {
+          const dollar = line[openAt] === '$'
+          const body = line.slice(openAt + 2)
+          const closeRe = dollar ? /\$\$/ : /\\\]/
+          const closeAt = body.search(closeRe)
+          const after = closeAt >= 0 ? body.slice(closeAt + 2) : ''
+          if (closeAt < 0 || !after.trim()) {
+            flushList()
+            if (closeAt < 0) { math = []; mathClose = closeRe; if (body.trim()) math.push(body) }
+            else {
+              const tex = body.slice(0, closeAt).trim()
+              if (tex) pushMath(tex)
+            }
+            continue
+          }
+        }
         const hm = /^(#{1,3})\s+(.*)$/.exec(line)
         if (hm) {
           flushList()
@@ -745,6 +830,7 @@ window.__ModuleLoader__.load({
       }
       flushCode()
       flushList()
+      flushMath()
       return els
     }
 
@@ -761,7 +847,7 @@ window.__ModuleLoader__.load({
           quiz.state === 'graded'
             ? h('span', { className: 'ls-quiz-badge' + (quiz.correct ? ' ok' : ' bad') }, quiz.correct ? '✅ 答对' : '❌ 答错')
             : answered ? h('span', { className: 'ls-quiz-badge wait' }, '已作答，等待反馈') : null),
-        quiz.stem ? h('div', { className: 'ls-quiz-stem' }, quiz.stem) : null,
+        quiz.stem ? h('div', { className: 'ls-quiz-stem' }, inlineNodes(quiz.stem, 'qs')) : null,
         h('div', { className: 'ls-quiz-opts' },
           (quiz.options || []).map(o =>
             h('button', {
@@ -772,7 +858,7 @@ window.__ModuleLoader__.load({
               onClick: () => { Promise.resolve(onAnswer(o.key)).then(ok => setLocalAnswer(ok ? o.key : null)) },
             },
               h('span', { className: 'ls-quiz-opt-key' }, o.key),
-              h('span', null, o.text)))),
+              h('span', null, inlineNodes(o.text, `qo${o.key}`))))),
       )
     }
 
@@ -801,9 +887,9 @@ window.__ModuleLoader__.load({
               r.node ? h('span', { className: 'ls-qh-node' }, r.node) : null,
               h('span', { className: 'ls-qh-ans' }, `答 ${r.answer}`)),
             openSeq === r.fbSeq ? h('div', { className: 'ls-qh-detail' },
-              h('div', { className: 'ls-qh-line' }, `题面：${r.stem}`),
-              h('div', { className: 'ls-qh-line' }, `选项：${r.options}`),
-              h('div', { className: 'ls-qh-line' }, `反馈：${r.feedback}`)) : null))),
+              h('div', { className: 'ls-qh-line' }, '题面：', inlineNodes(r.stem, `qhs${r.fbSeq}`)),
+              h('div', { className: 'ls-qh-line' }, '选项：', inlineNodes(r.options, `qho${r.fbSeq}`)),
+              h('div', { className: 'ls-qh-line' }, '反馈：', inlineNodes(r.feedback, `qhf${r.fbSeq}`))) : null))),
       )
     }
 

@@ -1053,13 +1053,23 @@ export function apply(ctx, config) {
           send(200, { ok: true })
           return
         }
-        // 静态资产：mermaid UMD（文件不可变，缓存一天；缺失 404 JSON 让客户端走降级）
-        if (req.method === 'GET' && url.pathname === '/api/learning-space/assets/mermaid.min.js') {
+        // 静态资产：mermaid / KaTeX（文件不可变，缓存一天；缺失 404 JSON 让客户端走降级）
+        if (req.method === 'GET' && url.pathname.startsWith('/api/learning-space/assets/')) {
+          const assetsDir = path.join(PLUGIN_DIR, 'assets')
+          const rel = url.pathname.slice('/api/learning-space/assets/'.length)
+          // 资产名全是 ASCII，用白名单字符挡住路径逃逸，免得 decodeURIComponent 抛错变 500
+          const file = /^[\w./-]+$/.test(rel) ? path.normalize(path.join(assetsDir, rel)) : ''
+          if (!file || !file.startsWith(assetsDir + path.sep)) { send(404, { ok: false, error: 'asset not found' }); return }
           let buf
-          try { buf = await readFile(path.join(PLUGIN_DIR, 'assets', 'mermaid.min.js')) }
-          catch { send(404, { ok: false, error: 'mermaid asset missing' }); return }
+          try { buf = await readFile(file) }
+          catch { send(404, { ok: false, error: 'asset missing' }); return }
+          const ext = path.extname(file).toLowerCase()
+          const type = ext === '.js' ? 'application/javascript; charset=utf-8'
+            : ext === '.css' ? 'text/css; charset=utf-8'
+              : ext === '.woff2' ? 'font/woff2'
+                : 'application/octet-stream'
           res.writeHead(200, {
-            'content-type': 'application/javascript; charset=utf-8',
+            'content-type': type,
             'cache-control': 'public, max-age=86400',
           })
           res.end(buf)
