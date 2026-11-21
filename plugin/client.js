@@ -405,6 +405,15 @@ window.__ModuleLoader__.load({
 .ls-upload-fill { height: 100%; background: var(--dsw-alias-brand-primary); transition: width .15s; }
 .ls-upload-err { font-size: 12px; color: var(--dsw-alias-state-danger-primary, #B5432E); padding: 4px 0; }
 .ls-file-label { display: inline-flex; align-items: center; gap: 6px; }
+/* 自绘悬停气泡：原生 title 在面板环境不浮现，改用 data-tip + ::after */
+.ls-tip { position: relative; }
+.ls-tip::after { content: attr(data-tip); position: absolute; right: 0; top: calc(100% + 6px); z-index: 40;
+  width: max-content; max-width: 220px; padding: 5px 8px; border-radius: 6px; text-align: left;
+  background: var(--dsw-alias-bg-layer-2); color: var(--dsw-alias-label-primary);
+  border: 1px solid var(--dsw-alias-border-l2); font-size: 11px; font-weight: 400; line-height: 1.5;
+  white-space: normal; opacity: 0; pointer-events: none; transition: opacity .12s ease-out; }
+.ls-tip:hover::after, .ls-tip:focus-visible::after { opacity: 1; transition-delay: .3s; }
+.ls-tip-left::after { right: auto; left: 0; }
 .ls-picked { margin-top: 6px; font-size: 12px; color: var(--dsw-alias-label-secondary); }
 .ls-picked-item { display: flex; align-items: center; gap: 6px; padding: 1px 0; word-break: break-all; }
 .ls-picked-x { cursor: pointer; border: none; background: none; color: var(--dsw-alias-label-secondary);
@@ -1101,6 +1110,7 @@ window.__ModuleLoader__.load({
 
     /** 材料扩展名白名单（与 Host 上传路由一致），供 file input 的 accept */
     const ACCEPT = '.pdf,.md,.txt,.docx,.pptx,.xlsx,.csv,.json,.epub,.png,.jpg,.jpeg,.gif,.webp,.zip'
+    const MATERIAL_TIP = '优先用 md/txt/pdf/图片；docx/pptx/xlsx/epub/zip 仅存储，AI 读不出正文'
 
     /** XHR 上传（fetch 无上传进度）：FormData + xhr.upload.onprogress 回传百分比 */
     function uploadFiles(topic, fileList, onProgress) {
@@ -1124,8 +1134,8 @@ window.__ModuleLoader__.load({
       })
     }
 
-    /** 隐藏 file input + 样式化按钮触发，选中即回调 */
-    function FilePickButton({ onFiles, label, disabled }) {
+    /** 隐藏 file input + 样式化按钮触发，选中即回调；tip 走 .ls-tip 悬停气泡 */
+    function FilePickButton({ onFiles, label, disabled, tip, tipAlign }) {
       const ref = useRef(null)
       return h('span', { className: 'ls-file-label' },
         h('input', {
@@ -1133,7 +1143,9 @@ window.__ModuleLoader__.load({
           onChange: e => { if (e.target.files && e.target.files.length) onFiles(e.target.files); e.target.value = '' },
         }),
         h('button', {
-          className: 'ls-btn', type: 'button', disabled,
+          className: 'ls-btn' + (tip ? ' ls-tip' + (tipAlign === 'left' ? ' ls-tip-left' : '') : ''),
+          type: 'button', disabled,
+          'data-tip': tip || null,
           onClick: () => ref.current && ref.current.click(),
         }, label || '导入材料'),
       )
@@ -1173,7 +1185,10 @@ window.__ModuleLoader__.load({
             className: 'ls-h', style: { border: 'none', padding: 0, margin: 0, cursor: 'pointer', userSelect: 'none' },
             onClick: () => setOpen(!open),
           }, `${open ? '▾' : '▸'} 学习材料${materials.length ? `（${materials.length}）` : ''}`),
-          h(FilePickButton, { onFiles: doUpload, disabled: uploading, label: uploading ? '上传中…' : '导入材料' })),
+          h(FilePickButton, {
+            onFiles: doUpload, disabled: uploading, label: uploading ? '上传中…' : '导入材料',
+            tip: MATERIAL_TIP,
+          })),
         open ? (materials.length === 0
           ? h('div', { className: 'ls-empty' }, '暂无材料')
           : materials.map(m => h('div', { key: m.name, className: 'ls-mat-item' },
@@ -1633,6 +1648,7 @@ window.__ModuleLoader__.load({
           h(FilePickButton, {
             onFiles: fl => setFiles(prev => [...prev, ...Array.from(fl)]),
             disabled: busy, label: files.length ? `＋ 追加材料（${files.length}）` : '＋ 附带材料',
+            tip: MATERIAL_TIP, tipAlign: 'left',
           }),
           h('button', { className: 'ls-btn', type: 'submit', disabled: busy || !name.trim() },
             busy ? '创建中…' : '＋ 新建课程'),

@@ -4,6 +4,7 @@
  * - tools: learn_guide / learn_status / learn_update（AI 教学时读方法、写进度）
  */
 import { readFile, writeFile, mkdir, readdir, stat, rm } from 'node:fs/promises'
+import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import path from 'node:path'
 import { randomUUID as cryptoRandomUUID } from 'node:crypto'
@@ -539,6 +540,64 @@ function nodePlanDesc(n) {
 /** 插件自身目录（定位 assets/，不依赖 cwd） */
 const PLUGIN_DIR = path.dirname(fileURLToPath(import.meta.url))
 
+/** Host 侧 KaTeX：导出报告时直接把公式渲染成 HTML（报告离线单文件，不带 katex.min.js） */
+let katexHostState = 0   // 0 未加载 / 1 可用 / 2 缺失
+let katexHost = null
+function getKatexHost() {
+  if (!katexHostState) {
+    try {
+      // 本包 type:module，require 会把 UMD 当 ESM 解析失败；读源码按 CJS 沙箱求值拿 module.exports
+      const code = readFileSync(path.join(PLUGIN_DIR, 'assets', 'katex', 'katex.min.js'), 'utf8')
+      const mod = { exports: {} }
+      new Function('module', 'exports', code)(mod, mod.exports)
+      if (typeof mod.exports.renderToString !== 'function') throw new Error('katex UMD 求值后无 renderToString')
+      katexHost = mod.exports
+      katexHostState = 1
+    } catch { katexHostState = 2 }
+  }
+  return katexHostState === 1 ? katexHost : null
+}
+let katexCssCache = null
+/** katex.min.css 的 woff2 内联成 data URI（单文件报告没法相对引字体），读过一次即缓存 */
+function getKatexCss() {
+  if (katexCssCache) return katexCssCache
+  try {
+    let css = readFileSync(path.join(PLUGIN_DIR, 'assets', 'katex', 'katex.min.css'), 'utf8')
+    css = css.replace(/url\(fonts\/([\w-]+\.woff2)\)/g, (m, name) => {
+      const b64 = readFileSync(path.join(PLUGIN_DIR, 'assets', 'katex', 'fonts', name)).toString('base64')
+      return `url(data:font/woff2;base64,${b64})`
+    })
+    katexCssCache = css
+  } catch { katexCssCache = '' }
+  return katexCssCache
+}
+/** 渲染一条公式；资产缺失记 ctx.wanted 走降级，成功记 ctx.used 供 head 决定是否内嵌样式 */
+function renderTexHost(tex, block, ctx) {
+  const k = getKatexHost()
+  if (!k || !getKatexCss()) { ctx.wanted = true; return null }
+  ctx.used = true
+  return k.renderToString(tex, { displayMode: block, throwOnError: false, strict: false })
+}
+/** 报告行内片段 → HTML：非公式/非标记部分转义，公式走 KaTeX，**加粗** 与 `行内码` 同客户端规则 */
+function reportInlineHtml(text, ctx) {
+  const src = String(text ?? '')
+  const re = /(\*\*[^*]+\*\*|`[^`]+`|\$\$[^$\n]+?\$\$|(?<!\\)\$(?![\s$])[^$\n]+?(?<![\s\\])\$(?!\d)|\\\((?:[^\\\n]|\\.)+?\\\)|\\\[(?:[^\\\n]|\\.)+?\\\])/g
+  let out = ''
+  let last = 0, m
+  while ((m = re.exec(src))) {
+    out += escapeHtml(src.slice(last, m.index))
+    const t = m[0]
+    if (t.startsWith('**')) out += `<strong>${escapeHtml(t.slice(2, -2))}</strong>`
+    else if (t.startsWith('`')) out += `<code>${escapeHtml(t.slice(1, -1))}</code>`
+    else {
+      const tex = t.startsWith('$') && !t.startsWith('$$') ? t.slice(1, -1) : t.slice(2, -2)
+      out += renderTexHost(tex, false, ctx) ?? escapeHtml(t)
+    }
+    last = m.index + t.length
+  }
+  return out + escapeHtml(src.slice(last))
+}
+
 /** HTML 转义：& < > " ' 五字符 */
 function escapeHtml(s) {
   return String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;')
@@ -562,36 +621,74 @@ const REPORT_STATUS_COLOR = { done: '#3E6B4F', doing: '#3D5A80', warn: '#B5432E'
  * 自包含 HTML 报告（方案 A）：mermaid.min.js 全文内嵌，浏览器打开时 startOnLoad 渲染。
  * mermaidJs 为 null 时降级：不嵌脚本，.mermaid 块直接显示源码文本 + 顶部提示。
  */
-/** 导出报告用极简 markdown → HTML：代码块/标题/列表/加粗/行内码；无法识别的行按段落（先整体转义防注入） */
-function mdToHtmlHost(text) {
+/** 导出报告用极简 markdown → HTML：代码块/块级公式/标题/列表/加粗/行内码/行内公式；无法识别的行按段落（先整体转义防注入） */
+function mdToHtmlHost(text, ctx) {
   const esc = escapeHtml
   const lines = String(text || '').split(/\r?\n/)
   const out = []
   let code = null
   let list = null
-  const inline = s => s
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/`([^`]+)`/g, '<code>$1</code>')
-  const flushList = () => { if (list && list.length) { out.push(`<ul>${list.map(li => `<li>${inline(li)}</li>`).join('')}</ul>`); list = null } }
+  let math = null
+  let mathClose = null
+  const flushList = () => { if (list && list.length) { out.push(`<ul>${list.map(li => `<li>${reportInlineHtml(li, ctx)}</li>`).join('')}</ul>`); list = null } }
+  const pushBlock = tex => {
+    const html = renderTexHost(tex, true, ctx)
+    out.push(html ? `<div class="math-block">${html}</div>` : `<pre><code>${esc(`$$${tex}$$`)}</code></pre>`)
+  }
+  const flushMath = () => {
+    if (!math) return
+    const tex = math.join('\n').trim()
+    math = null; mathClose = null
+    if (tex) pushBlock(tex)
+  }
   for (const raw of lines) {
     if (/^\s*```/.test(raw)) {
       if (code) { out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`); code = null } else { flushList(); code = [] }
       continue
     }
     if (code) { code.push(raw); continue }
+    if (math) {
+      const at = raw.search(mathClose)
+      if (at >= 0) {
+        const before = raw.slice(0, at)
+        if (before.trim()) math.push(before)
+        flushMath()
+      } else math.push(raw)
+      continue
+    }
+    // 块级公式：$$…$$ 或 \[…\]，同行闭合且后面没正文才当块，否则交给行内处理
+    const openAt = /^\s*(?:\$\$|\\\[)/.test(raw) ? (/^\s*\$\$/.test(raw) ? raw.indexOf('$$') : raw.indexOf('\\[')) : -1
+    if (openAt >= 0) {
+      const dollar = raw[openAt] === '$'
+      const body = raw.slice(openAt + 2)
+      const closeRe = dollar ? /\$\$/ : /\\\]/
+      const at = body.search(closeRe)
+      const after = at >= 0 ? body.slice(at + 2) : ''
+      if (at < 0 || !after.trim()) {
+        flushList()
+        if (at < 0) { math = []; mathClose = closeRe; if (body.trim()) math.push(body) }
+        else {
+          const tex = body.slice(0, at).trim()
+          if (tex) pushBlock(tex)
+        }
+        continue
+      }
+    }
     const hm = /^(#{1,4})\s+(.*)$/.exec(raw)
-    if (hm) { flushList(); out.push(`<h4>${inline(esc(hm[2]))}</h4>`); continue }
-    if (/^\s*[-*]\s+/.test(raw)) { list = list || []; list.push(esc(raw.replace(/^\s*[-*]\s+/, ''))); continue }
+    if (hm) { flushList(); out.push(`<h4>${reportInlineHtml(hm[2], ctx)}</h4>`); continue }
+    if (/^\s*[-*]\s+/.test(raw)) { list = list || []; list.push(raw.replace(/^\s*[-*]\s+/, '')); continue }
     flushList()
-    if (raw.trim()) out.push(`<p>${inline(esc(raw))}</p>`)
+    if (raw.trim()) out.push(`<p>${reportInlineHtml(raw, ctx)}</p>`)
   }
   if (code) out.push(`<pre><code>${esc(code.join('\n'))}</code></pre>`)
   flushList()
+  flushMath()
   return out.join('\n')
 }
 
 function buildReportHtml(topicsData, { all, mermaidJs }) {
   const esc = escapeHtml
+  const mctx = { used: false, wanted: false }
   const date = new Date().toISOString().slice(0, 10)
   const title = all ? `学习报告 · 全部课程（${date}）` : `学习报告 · ${topicsData[0] ? topicsData[0].name : ''}（${date}）`
   const sections = topicsData.map(t => {
@@ -604,23 +701,23 @@ function buildReportHtml(topicsData, { all, mermaidJs }) {
     const nodeRows = nodes.map(n =>
       `<tr><td>${esc(reportLabel(n.label))}</td><td><span class="badge" style="background:${REPORT_STATUS_COLOR[n.status] || REPORT_STATUS_COLOR.todo}">${REPORT_STATUS_LABEL[n.status] || n.status}</span></td></tr>`).join('')
     const quizRows = quizRecords.length ? quizRecords.map(r =>
-      `<tr><td>${esc(r.date)}</td><td>第 ${esc(r.index)} / ${esc(r.total)} 题</td><td>${r.correct ? '✅ 答对' : '❌ 答错'}</td><td>${esc(r.stem)}</td><td>答 ${esc(r.answer)}</td><td>${esc(r.feedback)}</td></tr>`).join('')
+      `<tr><td>${esc(r.date)}</td><td>第 ${esc(r.index)} / ${esc(r.total)} 题</td><td>${r.correct ? '✅ 答对' : '❌ 答错'}</td><td>${reportInlineHtml(r.stem, mctx)}</td><td>答 ${esc(r.answer)}</td><td>${reportInlineHtml(r.feedback, mctx)}</td></tr>`).join('')
       : '<tr><td colspan="6" class="muted">暂无答题记录</td></tr>'
     const mistakeItemsHtml = mistakes.length
-      ? `<ul>${mistakes.map(m => `<li>${esc(m)}</li>`).join('')}</ul>`
+      ? `<ul>${mistakes.map(m => `<li>${reportInlineHtml(m, mctx)}</li>`).join('')}</ul>`
       : '<p class="muted">暂无错题</p>'
     const journalHtml = journal.length
       ? `<ul>${journal.map(l => `<li>${esc(l)}</li>`).join('')}</ul>`
       : '<p class="muted">暂无日志</p>'
     const studyLog = t.studyLog || []
     const studyRows = studyLog.length ? studyLog.map(e =>
-      `<tr><td>${esc(e.date)}</td><td>${esc(e.node)}</td><td>${esc(e.mastery || '—')}</td><td>${esc(e.summary)}</td></tr>`).join('')
+      `<tr><td>${esc(e.date)}</td><td>${esc(e.node)}</td><td>${esc(e.mastery || '—')}</td><td>${reportInlineHtml(e.summary, mctx)}</td></tr>`).join('')
       : '<tr><td colspan="4" class="muted">暂无学习记录</td></tr>'
     const nodeNotes = t.nodeNotes || []
     const notesHtml = nodeNotes.length
       ? nodeNotes.map(nn => {
         const body = nn.content
-          ? mdToHtmlHost(nn.content)
+          ? mdToHtmlHost(nn.content, mctx)
           : nn.desc
             ? `<p>${esc(nn.desc)}</p><p class="muted">以上为该节点计划中的学习内容，教学笔记将在学习确认后写入。</p>`
             : '<p class="muted">暂无教学笔记（学到这里时 AI 会写入 notes/&lt;节点&gt;.md）</p>'
@@ -654,6 +751,8 @@ function buildReportHtml(topicsData, { all, mermaidJs }) {
 mermaid.initialize({ startOnLoad: true, theme: 'neutral', securityLevel: 'loose' })
 </script>`
     : `<p class="warn">mermaid 资产缺失，依赖图以源码文本显示。</p>`
+  const katexCss = mctx.used ? getKatexCss() : ''
+  const katexWarn = mctx.wanted ? '<p class="warn">KaTeX 资产缺失，公式以原始 TeX 显示。</p>' : ''
   return `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -686,13 +785,17 @@ th { background: #f1eee7; }
 ul { padding-left: 20px; } li { margin: 3px 0; font-size: 13px; }
 .muted { color: #9a968c; font-size: 13px; }
 .warn { background: #fdf3e7; border: 1px solid #e8c89a; border-radius: 8px; padding: 8px 12px; font-size: 13px; }
+.math-block { overflow-x: auto; overflow-y: hidden; margin: 8px 0; }
+.math-block .katex-display { margin: 0; }
 footer { color: #9a968c; font-size: 12px; text-align: center; margin-top: 12px; }
 </style>
+${katexCss ? `<style>${katexCss}</style>` : ''}
 </head>
 <body>
 <h1>${esc(title)}</h1>
 ${all && topicsData.length > 1 ? `<p class="muted">共 ${esc(topicsData.length)} 门课程</p>` : ''}
 ${mermaidBoot}
+${katexWarn}
 ${sections}
 <footer>由学习空间面板导出 · ${esc(date)}</footer>
 </body>
