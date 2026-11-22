@@ -984,12 +984,18 @@ window.__ModuleLoader__.load({
       // 发文本（输入框与 QuizCard 点选共用）：失败里 409 = 绑定会话已失效
       const sendText = async (text) => {
         if (!text || sending) return false
+        // 有待答的 ask_user_question 时带上其 callId：Host 会 cancel 挂起的回合让回复执行
+        let askCallId = null
+        for (let i = messages.length - 1; i >= 0; i--) {
+          const m = messages[i]
+          if (m.role === 'tool' && m.ask) { askCallId = m.state === 'running' ? m.callId : null; break }
+        }
         setSending(true); setErr(null)
         try {
           const r = await fetch('/api/learning-space/session/send', {
             method: 'POST',
             headers: { 'content-type': 'application/json' },
-            body: JSON.stringify({ topic, text, phase }),
+            body: JSON.stringify({ topic, text, phase, askCallId }),
           })
           const j = await r.json()
           if (j.ok) {
@@ -1061,7 +1067,7 @@ window.__ModuleLoader__.load({
           hasMore ? h('span', { className: 'ls-chat-more' }, '更早消息可在会话中查看') : null,
           messages.map((m, i) => {
             if (m.role === 'tool') {
-              // ask_user_question 待作答时渲染提示卡片：问题+选项只读展示，作答跳转完整会话
+              // ask_user_question 待作答时渲染提示卡片：输入框直接作答（Host 会解除挂起回合）
               if (m.ask && m.state === 'running') {
                 return h('div', { key: `q${m.seq}`, className: 'ls-ask' },
                   h('div', { className: 'ls-ask-badge' }, '❓ AI 想问你'),
@@ -1075,6 +1081,7 @@ window.__ModuleLoader__.load({
                             o.description ? h('span', { className: 'ls-ask-opt-desc' }, o.description) : null)))
                       : null,
                     q.multi_select ? h('div', { className: 'ls-ask-opt-desc' }, '（可多选）') : null)),
+                  h('div', { className: 'ls-ask-opt-desc' }, '在下方输入框直接输入回答发送，或去会话里点选'),
                   h('button', {
                     className: 'ls-btn ls-ask-go', type: 'button',
                     disabled: !sessionId || !onOpenInSession,

@@ -187,7 +187,7 @@ function mapEvents(records) {
     } else if (ev.type === 'tool/call') {
       const d = ev.data || {}
       const m = { seq, role: 'tool', toolName: d.name, callId: d.callId, state: 'running' }
-      // ask_user_question：把问题内容带上面板渲染成提示卡片（作答仍走完整会话）
+      // ask_user_question：把问题内容带上面板渲染成提示卡片（面板输入框可直接作答）
       if (d.name === 'ask_user_question' && typeof d.arguments === 'string') {
         try {
           const parsed = JSON.parse(d.arguments)
@@ -435,21 +435,29 @@ function phaseSessionId(state, phase) {
 
 // ── 两段 seed 指令（联网话术同一处三元拼接，保证两段一致） ──────────
 
+/** 资料来源话术：按材料目录实际存在与否拼接，避免 AI 去找不存在的目录或误以为无源可教 */
+function sourceLine(topic, webSearch, hasMaterials) {
+  if (hasMaterials) {
+    return `用户上传的材料在 materials/${topic}/ 目录下，先读原文再规划。${webSearch ? '材料不足时允许用网络搜索核实补充。' : '只允许使用用户上传的材料，禁止联网检索。'}`
+  }
+  return `用户未上传材料（materials/${topic}/ 目录不存在或为空，这是正常情况，不必再查找或报错）。${webSearch ? '以网络搜索获取并核实教学资料。' : '以你已有知识教学，禁止联网检索；对没把握的关键事实，明确向我标注「未经核实」。'}`
+}
+
 /** 阶段一 seed：只摸底 + 生成 plan.md，不开教 */
-function seedPhase1(topic, goal, webSearch) {
+function seedPhase1(topic, goal, webSearch, hasMaterials) {
   return `我开始了课程《${topic}》的摸底与学习计划生成${goal ? `（目标：${goal}）` : ''}。请先调用 learn_guide 获取完整教学方法，然后**只执行教学流程的前三步**：
-1. 确认资料来源：用户上传的材料在 materials/${topic}/ 目录下。${webSearch ? '资料不足时允许用网络搜索核实补充。' : '只允许使用用户上传的材料，禁止联网检索。'}
+1. 确认资料来源：${sourceLine(topic, webSearch, hasMaterials)}
 2. 出题定位：按 quiz 教学方法出摸底题，定位我的当前水平。
 3. 生成学习计划：综合目标和摸底结果，用 learn_update 的 save 把完整的 curriculum/${topic}/plan.md 重写（必须保持 frontmatter(topic/goal) + mermaid 依赖图(classDef done/doing/warn/todo + 节点:::类名) + 「## 学习顺序」checkbox 的格式）。
 
 **本阶段不要开始正式教学，不要讲解任何节点的内容。** 计划写入 plan.md 后，明确告诉我：「学习计划已生成，请在学习空间面板点击开始学习」。`
 }
 
-/** 阶段二 seed：按 plan.md 逐节点教学，每节点确认后必须写 study_log */
-function seedPhase2(topic, goal, webSearch) {
+/** 阶段二 seed：按 plan.md 逐节点教学，每节点确认后必须写 study_log 与节点笔记 */
+function seedPhase2(topic, goal, webSearch, hasMaterials) {
   return `我开始课程《${topic}》的正式学习${goal ? `（目标：${goal}）` : ''}。请先调用 learn_guide 获取教学方法，再调用 learn_status 查看进度，然后严格按 curriculum/${topic}/plan.md 的「学习顺序」教学：从第一个未确认（\`[ ]\`/\`[!]\`）节点开始，已确认的跳过。
-每教完一个节点，依次：①向我确认掌握情况后才进入下一节点；②用 learn_update 的 save 更新 plan.md 中该节点的 checkbox 状态；③**必须**用 learn_update 的 study_log 把本节点摘要（知识点要点 + 我的掌握情况）写入学习记录；④发现我答错的题用 record_mistake 记错题。
-资料来源：materials/${topic}/ 目录下的用户材料${webSearch ? '，可辅以网络搜索核实。' : '，禁止联网检索。'}`
+每教完一个节点，依次：①向我确认掌握情况后才进入下一节点；②用 learn_update 的 save 更新 plan.md 中该节点的 checkbox 状态；③**必须**用 learn_update 的 study_log 把本节点摘要（知识点要点 + 我的掌握情况）写入学习记录；④发现我答错的题用 record_mistake 记错题；⑤**必须**用 learn_update 的 save 把该节点教学笔记写入 curriculum/${topic}/notes/<节点>.md（frontmatter 带 node/deps/date，正文为本节点讲解要点，公式用 LaTeX）——面板的节点笔记区靠这个文件渲染，缺了会一直显示「还没有教学笔记」。
+资料来源：${sourceLine(topic, webSearch, hasMaterials)}`
 }
 
 // ── 计划成型检测 + 学习记录解析 ──────────────────
@@ -998,7 +1006,11 @@ export function apply(ctx, config) {
             // 唤醒：按 phase 注入对应 seed（联网开关取当时值，指令级生效）
             let goal = ''
             try { goal = parsePlan(await readFile(path.join(topicDir, 'plan.md'), 'utf8')).goal } catch { /* 无 plan */ }
-            const seed = phase === 1 ? seedPhase1(topic, goal, state.webSearch) : seedPhase2(topic, goal, state.webSearch)
+            let hasMaterials = false
+            try { hasMaterials = (await readdir(path.join(root, 'materials', topic))).length > 0 } catch { /* 无材料目录 */ }
+            const seed = phase === 1
+              ? seedPhase1(topic, goal, state.webSearch, hasMaterials)
+              : seedPhase2(topic, goal, state.webSearch, hasMaterials)
             try {
               await ctx.sessionController.prompt({
                 sessionId,
@@ -1057,7 +1069,7 @@ export function apply(ctx, config) {
         }
         // 内嵌对话窗：往绑定会话发消息（不在此隐式建课）；按 phase 路由到对应会话
         if (req.method === 'POST' && url.pathname === '/api/learning-space/session/send') {
-          const { topic, text, phase: phaseParam } = await readBody(req)
+          const { topic, text, phase: phaseParam, askCallId } = await readBody(req)
           if (!validTopic(topic)) { send(400, { ok: false, error: 'invalid topic' }); return }
           if (!text || typeof text !== 'string') { send(400, { ok: false, error: 'empty text' }); return }
           if (text.length > 8000) { send(400, { ok: false, error: 'text too long' }); return }
@@ -1065,6 +1077,20 @@ export function apply(ctx, config) {
           const phase = resolvePhase(state, phaseParam)
           const sessionId = phaseSessionId(state, phase)
           if (!sessionId) { send(409, { ok: false, error: 'session gone, start first' }); return }
+          // ask_user_question 待作答时回合挂在工具调用上，queue 的回复要等超时才执行：
+          // 客户端带上它看到的待答 callId，这里核实后先入 inbox 再 cancel 当前回合，
+          // cancel 不丢 inbox，回复随即开新回合执行（模型收到 ASK_ABORTED + 用户回复）
+          let cancelStalledAsk = false
+          if (typeof askCallId === 'string' && askCallId) {
+            try {
+              const page = await ctx.sessionController.events(
+                { address: { kind: 'session', sessionId }, maxMessages: 200 },
+                AbortSignal.timeout(10000),
+              )
+              cancelStalledAsk = mapEvents(page && page.records).messages.some(
+                m => m.role === 'tool' && m.callId === askCallId && m.state === 'running')
+            } catch { cancelStalledAsk = false }
+          }
           // 冷会话（DSH 重启后 ctx.sessions 里没有）也直接投递：prompt 会先恢复会话
           try {
             const requestId = cryptoRandomUUID()
@@ -1074,6 +1100,13 @@ export function apply(ctx, config) {
               mode: 'queue',
               content: [{ type: 'text', text }],
             }, AbortSignal.timeout(15000))
+            if (cancelStalledAsk && typeof ctx.sessionController.cancel === 'function') {
+              try {
+                await ctx.sessionController.cancel({ sessionId }, AbortSignal.timeout(8000))
+              } catch (err) {
+                try { ctx.logger.warn(`learning-space: cancel stalled ask failed for ${sessionId}: ${String(err && err.message || err)}`) } catch { /* 无 logger */ }
+              }
+            }
             send(200, { ok: true, requestId })
           } catch (err) {
             if (isSessionNotFound(err)) { send(409, { ok: false, error: 'session gone, start first' }); return }
