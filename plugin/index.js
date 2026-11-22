@@ -456,7 +456,7 @@ function seedPhase1(topic, goal, webSearch, hasMaterials) {
 /** 阶段二 seed：按 plan.md 逐节点教学，每节点确认后必须写 study_log 与节点笔记 */
 function seedPhase2(topic, goal, webSearch, hasMaterials) {
   return `我开始课程《${topic}》的正式学习${goal ? `（目标：${goal}）` : ''}。请先调用 learn_guide 获取教学方法，再调用 learn_status 查看进度，然后严格按 curriculum/${topic}/plan.md 的「学习顺序」教学：从第一个未确认（\`[ ]\`/\`[!]\`）节点开始，已确认的跳过。
-每教完一个节点，依次：①向我确认掌握情况后才进入下一节点；②用 learn_update 的 save 更新 plan.md 中该节点的 checkbox 状态；③**必须**用 learn_update 的 study_log 把本节点摘要（知识点要点 + 我的掌握情况）写入学习记录；④发现我答错的题用 record_mistake 记错题；⑤**必须**用 learn_update 的 save 把该节点教学笔记写入 curriculum/${topic}/notes/<节点>.md（frontmatter 带 node/deps/date，正文为本节点讲解要点，公式用 LaTeX）——面板的节点笔记区靠这个文件渲染，缺了会一直显示「还没有教学笔记」。
+每教完一个节点，依次：①向我确认掌握情况后才进入下一节点；②用 learn_update 的 save 更新 plan.md 中该节点的 checkbox 状态；③**必须**用 learn_update 的 study_log 把本节点摘要（知识点要点 + 我的掌握情况）写入学习记录；④发现我答错的题用 record_mistake 记错题；⑤**必须**维护该节点的教学笔记，顺序不可颠倒：**在输出该节点第一句讲解之前**，先用 learn_update 的 save 把笔记草稿写入 curriculum/${topic}/notes/<节点>.md（frontmatter 带 node/deps/date，正文为本节点要讲的要点提纲），然后才开始讲；我确认掌握后再 save 一次，把完整讲解（公式用 LaTeX）补进同一个文件。面板节点区按这个文件实时渲染，用户点开节点就要能看到教学内容——草稿没写就先别开口讲。
 资料来源：${sourceLine(topic, webSearch, hasMaterials)}`
 }
 

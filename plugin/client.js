@@ -392,6 +392,7 @@ window.__ModuleLoader__.load({
 .ls-focus-right { display: flex; flex-direction: column; min-height: 0; border: 1px solid var(--dsw-alias-border-l1); border-radius: 8px; padding: 12px 14px; background: var(--dsw-alias-bg-layer-1); }
 .ls-focus-right .ls-chat { margin-top: 0; border-top: none; padding-top: 0; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .ls-focus-right .ls-chat-list { flex: 1; max-height: none; min-height: 200px; }
+.ls-focus-cta { display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 10px; }
 @media (max-width: 900px) { .ls-focus { grid-template-columns: 1fr; height: auto; } .ls-focus-left { max-height: 40vh; } }
 .ls-side-name { flex: 1; min-width: 0; }
 .ls-side-frac { font-size: 12px; color: var(--dsw-alias-label-secondary); flex: none; }
@@ -1351,20 +1352,24 @@ window.__ModuleLoader__.load({
     /** 专注页左栏：节点手风琴——点节点展开该节点的教学笔记（notes/<节点>.md） */
     function NodeAccordion({ topic }) {
       const [openNode, setOpenNode] = useState(null)
-      const [notes, setNotes] = useState({})   // label -> content（含 '' 已确认为无笔记）
+      const [notes, setNotes] = useState({})   // label -> content（''/null = 暂时无内容，展开期间继续跟取）
       const nodes = topic.nodes.length ? topic.nodes : (topic.order || []).map(l => ({ id: l, label: l, status: 'todo' }))
       const label = n => cleanLabel(n.label || n.id)
-      const toggle = async label => {
-        if (openNode === label) { setOpenNode(null); return }
-        setOpenNode(label)
-        if (notes[label] === undefined) {
-          try {
-            const r = await fetch(`/api/learning-space/node-note?topic=${encodeURIComponent(topic.name)}&node=${encodeURIComponent(label)}`)
-            const j = await r.json()
-            setNotes(prev => ({ ...prev, [label]: j.ok ? j.content : null }))
-          } catch { setNotes(prev => ({ ...prev, [label]: null })) }
-        }
-      }
+      const toggle = label => setOpenNode(prev => (prev === label ? null : label))
+      // 笔记由 AI 在教学过程中写入（开始教时草稿、确认后补全）：展开且无内容期间定时跟取，避免卡在占位文案
+      const openContent = openNode ? notes[openNode] : undefined
+      const hasOpenContent = !!(openContent && String(openContent).trim())
+      useEffect(() => {
+        if (!openNode || hasOpenContent) return undefined
+        let alive = true
+        const pull = () => fetch(`/api/learning-space/node-note?topic=${encodeURIComponent(topic.name)}&node=${encodeURIComponent(openNode)}`)
+          .then(r => r.json())
+          .then(j => { if (alive) setNotes(prev => ({ ...prev, [openNode]: j.ok ? j.content : null })) })
+          .catch(() => { if (alive) setNotes(prev => ({ ...prev, [openNode]: null })) })
+        pull()
+        const t = setInterval(pull, 8000)
+        return () => { alive = false; clearInterval(t) }
+      }, [openNode, hasOpenContent, topic.name])
       return h('div', { className: 'ls-section' },
         h('div', { className: 'ls-side-head', style: { marginBottom: 8 } },
           h('span', { className: 'ls-h', style: { border: 'none', padding: 0, margin: 0 } }, '知识节点（点击看教学内容）')),
@@ -1388,7 +1393,7 @@ window.__ModuleLoader__.load({
               content === undefined ? '加载中…'
               : content === null ? '（读取失败，稍后再试）'
               : content.trim() ? markdownLite(content)
-              : '（还没有这个节点的教学笔记——学到这里时 AI 会写入 notes/<节点>.md）')
+              : '（还没有这个节点的教学笔记——AI 开始教该节点时会写草稿、确认后补全，写入后这里自动刷新。老会话沿用的是旧约定，点「重新学习 ↻」后生效）')
               : null,
           )
         })),
@@ -1396,7 +1401,7 @@ window.__ModuleLoader__.load({
     }
 
     /** 专注学习页：左 = 教的知识（方案/学习记录/材料），右 = 问答对话窗，头部带返回 */
-    function StudyFocusView({ topic, onBack, onOpenInSession, onRefresh }) {
+    function StudyFocusView({ topic, onBack, onOpenInSession, onRefresh, onStart, starting }) {
       const [quizTick, setQuizTick] = useState(0)
       const phase = topic.phase === 1 ? 1 : 2
       const total = topic.nodes.length || topic.order.length || 0
@@ -1408,6 +1413,11 @@ window.__ModuleLoader__.load({
             h('button', { className: 'ls-btn', type: 'button', onClick: onBack }, '← 返回'),
             h('span', { className: 'ls-focus-title', title: topic.name }, topic.name),
             h('span', { className: 'ls-frac' }, `${done}/${total} 已确认`),
+            phase === 2 ? h('button', {
+              className: 'ls-btn', title: '新建学习会话，从学习方案开头重新教；旧会话保留在会话列表',
+              type: 'button', disabled: starting,
+              onClick: () => onStart(topic.name, 2, true),
+            }, starting ? '…' : '重新学习 ↻') : null,
             topic.nodes.length ? h(NotificationBell, { nodes: topic.nodes }) : null),
           h(NodeAccordion, { topic }),
           h(MaterialList, { topic, onRefresh })),
@@ -1419,7 +1429,14 @@ window.__ModuleLoader__.load({
             sessionId: phase === 1 ? topic.phase1SessionId : topic.phase2SessionId,
             onOpenInSession,
             onQuizGraded: () => setQuizTick(t => t + 1),
-          })),
+          }),
+          // 摸底计划生成后就地给入口，免得用户以为要返回详情页找「开始学习」
+          phase === 1 && topic.planReady ? h('div', { className: 'ls-focus-cta' },
+            h('span', { className: 'ls-frac' }, '学习计划已就绪'),
+            h('button', {
+              className: 'ls-btn', type: 'button', disabled: starting,
+              onClick: () => onStart(topic.name, 2),
+            }, starting ? '创建中…' : '开始学习 →')) : null),
       )
     }
 
@@ -1780,6 +1797,8 @@ window.__ModuleLoader__.load({
           onBack: () => setStudyView(null),
           onOpenInSession: sid => panelCtx && panelCtx.uiWorkspace && panelCtx.uiWorkspace.openSession(sid),
           onRefresh: load,
+          onStart: startLearning,
+          starting: starting === studyTopic.name,
         }),
       )
       return h('div', { className: 'ls-panel' },
