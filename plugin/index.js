@@ -55,8 +55,11 @@ function parsePlan(text) {
         for (const p of parts) pushNode(p.id, p.label, p.cls)
         for (let i = 0; i + 1 < parts.length; i++) edges.push([parts[i].id, parts[i + 1].id])
       } else {
-        const def = /^\s*([^\[\]:"']+?)\s*\["([^"]*)"\]\s*(?:::+(\w+))?/.exec(line)
-        if (def) pushNode(def[1].trim(), def[2], def[3])
+        // 独立定义行：带引号 A["x"] 与不带引号 A[x] 都认（AI 两种风格都会写）；
+        // 跳过 mermaid 关键字行，免得 end/subgraph 之类被当成节点
+        if (/^(end|subgraph|direction|style|linkStyle|classDef|class|click)\b/.test(line)) continue
+        const def = idDef(line)
+        if (def) pushNode(def.id, def.label, def.cls)
       }
     }
   }
@@ -456,7 +459,7 @@ function seedPhase1(topic, goal, webSearch, hasMaterials) {
 /** 阶段二 seed：按 plan.md 逐节点教学，每节点确认后必须写 study_log 与节点笔记 */
 function seedPhase2(topic, goal, webSearch, hasMaterials) {
   return `我开始课程《${topic}》的正式学习${goal ? `（目标：${goal}）` : ''}。请先调用 learn_guide 获取教学方法，再调用 learn_status 查看进度，然后严格按 curriculum/${topic}/plan.md 的「学习顺序」教学：从第一个未确认（\`[ ]\`/\`[!]\`）节点开始，已确认的跳过。
-每教完一个节点，依次：①向我确认掌握情况后才进入下一节点；②用 learn_update 的 save 更新 plan.md 中该节点的 checkbox 状态；③**必须**用 learn_update 的 study_log 把本节点摘要（知识点要点 + 我的掌握情况）写入学习记录；④发现我答错的题用 record_mistake 记错题；⑤**必须**维护该节点的教学笔记，顺序不可颠倒：**在输出该节点第一句讲解之前**，先用 learn_update 的 save 把笔记草稿写入 curriculum/${topic}/notes/<节点>.md（frontmatter 带 node/deps/date，正文为本节点要讲的要点提纲），然后才开始讲；我确认掌握后再 save 一次，把完整讲解（公式用 LaTeX）补进同一个文件。面板节点区按这个文件实时渲染，用户点开节点就要能看到教学内容——草稿没写就先别开口讲。
+每教完一个节点，依次：①向我确认掌握情况后才进入下一节点；②用 learn_update 的 save 更新 plan.md 中该节点的 checkbox 状态；③**必须**用 learn_update 的 study_log 把本节点摘要（知识点要点 + 我的掌握情况）写入学习记录；④发现我答错的题用 record_mistake 记错题；⑤**必须**维护该节点的教学笔记，顺序不可颠倒：**在输出该节点第一句讲解之前**，先用 learn_update 的 save 把笔记草稿写入 curriculum/${topic}/notes/<节点>.md（节点名含 : 等 Windows 文件名非法字符时改用节点 id 命名，如 html-basics.md；frontmatter 带 node/deps/date，正文为本节点要讲的要点提纲），然后才开始讲；我确认掌握后再 save 一次，把完整讲解（公式用 LaTeX）补进同一个文件。面板节点区按这个文件实时渲染，用户点开节点就要能看到教学内容——草稿没写就先别开口讲。
 资料来源：${sourceLine(topic, webSearch, hasMaterials)}`
 }
 
@@ -490,14 +493,19 @@ function safeJoin(root, rel, allowedBases) {
 
 // ── 导出报告（自包含 HTML）─────────────────────────
 
-/** 笔记文件名匹配：notes 目录文件列表 + 节点名 → 匹配的文件名（精确/清洗/归一化三级） */
-function matchNoteFile(files, node) {
+/** 笔记文件名匹配：精确/清洗/归一化/节点 id/标签冒号前缀五级。
+ *  Windows 文件名不能含 : 等字符，AI 会改用节点 id 命名（如 html-basics.md），
+ *  而面板传来的是完整标签（html-basics: 控件是什么…），后两级兜住这种差异。 */
+function matchNoteFile(files, node, id) {
   const stem = n => n.replace(/\.md$/i, '')
   const norm = s => s.replace(/[\s\u3000（）()：:、，,。.\-—_/\\]/g, '')
+  const colonPrefix = String(node).split(/[:：]/)[0].trim()
   return files.find(f =>
     stem(f) === node
     || stem(f) === node.replace(/[\\/:*?"<>|]/g, '-')
-    || norm(stem(f)) === norm(node)) || null
+    || norm(stem(f)) === norm(node)
+    || (id && (stem(f) === id || norm(stem(f)) === norm(id)))
+    || (colonPrefix && colonPrefix !== node && (stem(f) === colonPrefix || norm(stem(f)) === norm(colonPrefix)))) || null
 }
 
 /** 报告展示用标签清洗：<br/> 换行标记 → 「 · 」（源数据不动） */
@@ -830,7 +838,7 @@ async function collectTopicForExport(root, t) {
   for (const n of t.nodes) {
     const label = n.label || n.id
     let content = ''
-    const f = matchNoteFile(noteFiles, label)
+    const f = matchNoteFile(noteFiles, label, n.id)
     if (f) {
       try { content = await readFile(path.join(root, 'curriculum', t.name, 'notes', f), 'utf8') } catch { /* 读失败按无笔记 */ }
       // 笔记头部 frontmatter（node/deps/date）是元数据，报告只呈现正文
@@ -1215,11 +1223,12 @@ export function apply(ctx, config) {
         if (req.method === 'GET' && url.pathname === '/api/learning-space/node-note') {
           const topic = url.searchParams.get('topic') || ''
           const node = url.searchParams.get('node') || ''
+          const id = url.searchParams.get('id') || ''
           if (!validTopic(topic) || !node || node.length > 200) { send(400, { ok: false, error: 'invalid params' }); return }
           const notesDir = path.join(root, 'curriculum', topic, 'notes')
           let files = []
           try { files = await readdir(notesDir) } catch { send(200, { ok: true, content: '' }); return }
-          const target = matchNoteFile(files, node)
+          const target = matchNoteFile(files, node, id)
           if (!target) { send(200, { ok: true, content: '' }); return }
           let content = ''
           try { content = await readFile(path.join(notesDir, target), 'utf8') } catch { /* 读失败按无笔记 */ }

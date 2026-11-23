@@ -1359,17 +1359,19 @@ window.__ModuleLoader__.load({
       // 笔记由 AI 在教学过程中写入（开始教时草稿、确认后补全）：展开且无内容期间定时跟取，避免卡在占位文案
       const openContent = openNode ? notes[openNode] : undefined
       const hasOpenContent = !!(openContent && String(openContent).trim())
+      // Windows 上笔记文件可能按节点 id 命名（标签含 : 等非法文件名字符），id 一并传给服务端兜底匹配
+      const openId = openNode ? ((nodes.find(n => (n.label || n.id) === openNode) || {}).id || '') : ''
       useEffect(() => {
         if (!openNode || hasOpenContent) return undefined
         let alive = true
-        const pull = () => fetch(`/api/learning-space/node-note?topic=${encodeURIComponent(topic.name)}&node=${encodeURIComponent(openNode)}`)
+        const pull = () => fetch(`/api/learning-space/node-note?topic=${encodeURIComponent(topic.name)}&node=${encodeURIComponent(openNode)}&id=${encodeURIComponent(openId)}`)
           .then(r => r.json())
           .then(j => { if (alive) setNotes(prev => ({ ...prev, [openNode]: j.ok ? j.content : null })) })
           .catch(() => { if (alive) setNotes(prev => ({ ...prev, [openNode]: null })) })
         pull()
         const t = setInterval(pull, 8000)
         return () => { alive = false; clearInterval(t) }
-      }, [openNode, hasOpenContent, topic.name])
+      }, [openNode, openId, hasOpenContent, topic.name])
       return h('div', { className: 'ls-section' },
         h('div', { className: 'ls-side-head', style: { marginBottom: 8 } },
           h('span', { className: 'ls-h', style: { border: 'none', padding: 0, margin: 0 } }, '知识节点（点击看教学内容）')),
